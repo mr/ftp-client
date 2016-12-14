@@ -6,9 +6,10 @@ import qualified Data.ByteString.Char8 as C
 import Network.Socket
 import System.IO
 import Data.Monoid ((<>))
+import Control.Exception
 
-hostName = "ftp.ftp.ftp"
-port = "21"
+gHost = "ftp.ftp.ftp"
+gPort = 21
 gUser = "dank"
 gPass = "memes"
 
@@ -51,26 +52,30 @@ sendCommand h fc = do
     C.hPut h $ C.pack $ serializeCommand fc <> "\r\n"
     getMultiLineResp h
 
+withFTP :: String -> Int -> (Handle -> C.ByteString -> IO a) -> IO a
+withFTP host port f = bracket (do
+        let hints = defaultHints {
+            addrFlags = [AI_NUMERICSERV],
+            addrSocketType = Stream
+        }
+        addr:_ <- getAddrInfo (Just hints) (Just host) (Just $ show port)
+
+        sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+        connect sock (addrAddress addr)
+        h <- socketToHandle sock ReadWriteMode
+        resp <- getMultiLineResp h
+        return (h, resp)
+    )
+    (\(h, _) -> hClose h)
+    (uncurry f)
+
 login :: Handle -> String -> String -> IO C.ByteString
 login h user pass = do
     sendCommand h (User user)
     sendCommand h (Pass pass)
 
-
 testFTP :: IO ()
 testFTP = do
-    let hints = defaultHints {
-        addrFlags = [AI_NUMERICSERV],
-        addrSocketType = Stream
-    }
-    addr:_ <- getAddrInfo (Just hints) (Just hostName) (Just port)
-
-    sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
-    connect sock (addrAddress addr)
-    h <- socketToHandle sock ReadWriteMode
-    -- Welcome!
-    print =<< getMultiLineResp h
-
-    print =<< login h gUser gPass
-
-    hClose h
+    withFTP gHost gPort $ \h welcome -> do
+        print welcome
+        print =<< login h gUser gPass

@@ -8,11 +8,6 @@ import System.IO
 import Data.Monoid ((<>))
 import Control.Exception
 
-gHost = "ftp.ftp.ftp"
-gPort = 21
-gUser = "dank"
-gPass = "memes"
-
 data FTPCommand
     = User String
     | Pass String
@@ -53,7 +48,8 @@ sendCommand h fc = do
     getMultiLineResp h
 
 withFTP :: String -> Int -> (Handle -> C.ByteString -> IO a) -> IO a
-withFTP host port f = bracket (do
+withFTP host port f = bracket
+    (do
         let hints = defaultHints {
             addrFlags = [AI_NUMERICSERV],
             addrSocketType = Stream
@@ -74,8 +70,8 @@ login h user pass = do
     sendCommand h (User user)
     sendCommand h (Pass pass)
 
-testFTP :: IO ()
-testFTP = do
-    withFTP gHost gPort $ \h welcome -> do
+testFTP :: String -> Int -> String -> String -> IO ()
+testFTP host port user pass = do
+    withFTP host port $ \h welcome -> do
         print welcome
-        print =<< login h gUser gPass
+        print =<< login h user pass

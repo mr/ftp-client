@@ -3,22 +3,58 @@ module Network.FTP.Client (
 ) where
 
 import qualified Data.ByteString.Char8 as C
+import Data.List
+import Data.Attoparsec.ByteString.Char8
 import Network.Socket
 import System.IO
 import Data.Monoid ((<>))
 import Control.Exception
+import Control.Monad
+
+parse227 :: Parser (String, Int)
+parse227 = do
+    string "227"
+    skipSpace
+    [h1,h2,h3,h4,p1,p2] <- many1 digit `sepBy` char ','
+    let host = intercalate "." [h1,h2,h3,h4]
+        port = read $ p1 <> p2
+    return (host, port)
+
+data ResponseStatus
+    = Wait
+    | Success
+    | Continue
+    | FailureRetry
+    | Failure
+
+responseStatus :: C.ByteString -> ResponseStatus
+responseStatus cbs =
+    case C.uncons cbs of
+        Just ('1', _) -> Wait
+        Just ('2', _) -> Success
+        Just ('3', _) -> Continue
+        Just ('4', _) -> FailureRetry
+        _             -> Failure
+
+data RTypeCode = TA | TI
+
+serialzeRTypeCode :: RTypeCode -> String
+serialzeRTypeCode TA = "A"
+serialzeRTypeCode TI = "I"
 
 data FTPCommand
     = User String
     | Pass String
     | Acct String
     | Abor
+    | RType RTypeCode
 
 serializeCommand :: FTPCommand -> String
 serializeCommand (User user) = "USER " <> user
 serializeCommand (Pass pass) = "PASS " <> pass
 serializeCommand (Acct acct) = "ACCT " <> acct
-serializeCommand (Abor)      = "ABOR"
+serializeCommand Abor        = "ABOR"
+serializeCommand (RType rt)  = "TYPE " <> serialzeRTypeCode rt
 
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
 
@@ -71,7 +107,7 @@ login h user pass = do
     sendCommand h (Pass pass)
 
 testFTP :: String -> Int -> String -> String -> IO ()
-testFTP host port user pass = do
+testFTP host port user pass =
     withFTP host port $ \h welcome -> do
         print welcome
         print =<< login h user pass

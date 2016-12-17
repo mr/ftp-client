@@ -1,5 +1,9 @@
 module Network.FTP.Client (
-    testFTP
+    withFTP,
+    login,
+    pasv,
+    createTransferHandlePasv,
+    sendCommand
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -48,6 +52,7 @@ data FTPCommand
     | Acct String
     | Abor
     | RType RTypeCode
+    | Pasv
 
 serializeCommand :: FTPCommand -> String
 serializeCommand (User user) = "USER " <> user
@@ -55,6 +60,7 @@ serializeCommand (Pass pass) = "PASS " <> pass
 serializeCommand (Acct acct) = "ACCT " <> acct
 serializeCommand Abor        = "ABOR"
 serializeCommand (RType rt)  = "TYPE " <> serialzeRTypeCode rt
+serializeCommand Pasv        = "PASV"
 
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
 
@@ -83,28 +89,41 @@ sendCommand h fc = do
     C.hPut h $ C.pack $ serializeCommand fc <> "\r\n"
     getMultiLineResp h
 
-withFTP :: String -> Int -> (Handle -> C.ByteString -> IO a) -> IO a
-withFTP host port f = bracket
-    (do
-        let hints = defaultHints {
-            addrFlags = [AI_NUMERICSERV],
-            addrSocketType = Stream
-        }
-        addr:_ <- getAddrInfo (Just hints) (Just host) (Just $ show port)
+createHandle :: String -> Int -> IO Handle
+createHandle host port = do
+    let hints = defaultHints {
+        addrFlags = [AI_NUMERICSERV],
+        addrSocketType = Stream
+    }
+    addr:_ <- getAddrInfo (Just hints) (Just host) (Just $ show port)
 
-        sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
-        connect sock (addrAddress addr)
-        h <- socketToHandle sock ReadWriteMode
-        resp <- getMultiLineResp h
-        return (h, resp)
-    )
-    (\(h, _) -> hClose h)
-    (uncurry f)
+    sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+    connect sock (addrAddress addr)
+    socketToHandle sock ReadWriteMode
+
+withHandle :: String -> Int -> (Handle -> IO a) -> IO a
+withHandle host port f = bracket (createHandle host port) hClose f
+
+withFTP :: String -> Int -> (Handle -> C.ByteString -> IO a) -> IO a
+withFTP host port f = withHandle host port $ \h -> getMultiLineResp h >>= f h
+
+createTransferHandlePasv :: Handle -> IO Handle
+createTransferHandlePasv ch = do
+    (host, port) <- pasv ch
+    th <- createHandle host port
+    void $ getMultiLineResp th
+    return th
 
 login :: Handle -> String -> String -> IO C.ByteString
 login h user pass = do
     sendCommand h (User user)
     sendCommand h (Pass pass)
+
+pasv :: Handle -> IO (String, Int)
+pasv h = do
+    resp <- sendCommand h Pasv
+    let (Right (host, port)) = parseOnly parse227 resp
+    return (host, port)
 
 testFTP :: String -> Int -> String -> String -> IO ()
 testFTP host port user pass =

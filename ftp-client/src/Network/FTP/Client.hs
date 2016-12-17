@@ -124,9 +124,3 @@ pasv h = do
     resp <- sendCommand h Pasv
     let (Right (host, port)) = parseOnly parse227 resp
     return (host, port)
-
-testFTP :: String -> Int -> String -> String -> IO ()
-testFTP host port user pass =
-    withFTP host port $ \h welcome -> do
-        print welcome
-        print =<< login h user pass

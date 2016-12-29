@@ -6,7 +6,7 @@ import Data.Conduit.Binary
 import Data.Conduit
 import Control.Monad.IO.Class
 import System.IO
-import Network.FTP.Client
+import Network.FTP.Client (createTransferHandlePasv, sendCommand, FTPCommand(..), RTypeCode(..))
 import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
 

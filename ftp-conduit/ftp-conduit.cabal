@@ -22,6 +22,7 @@ library
                      , conduit
                      , bytestring
   default-language:    Haskell2010
+  default-extensions:  RankNTypes
 
 executable ftp-conduit-exe
   hs-source-dirs:      app
@@ -30,7 +31,10 @@ executable ftp-conduit-exe
   build-depends:       base
                      , ftp-conduit
                      , ftp-client
+                     , conduit
+                     , conduit-combinators
   default-language:    Haskell2010
+  default-extensions:  RankNTypes
 
 test-suite ftp-conduit-test
   type:                exitcode-stdio-1.0

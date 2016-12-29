@@ -1,8 +1,8 @@
 module Main where
 
 import Network.FTP.Client
-import qualified Network.FTP.Conduit as FC
-import Data.Conduit
+import qualified Network.FTP.Client.Conduit as FC
+import Conduit
 import System.Environment
 
 main :: IO ()
@@ -12,4 +12,4 @@ main = do
     withFTP host port $ \h welcome -> do
         print welcome
         print =<< login h user pass
-        print =<< runConduit (FC.nlst h [])
+        runConduit $ FC.nlst h [] .| mapM_C print

@@ -5,8 +5,10 @@ module Network.FTP.Client (
     nlst,
     createTransferHandlePasv,
     sendCommand,
+    sendCommands,
     FTPCommand(..),
-    RTypeCode(..)
+    RTypeCode(..),
+    getLineResp
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -106,6 +108,9 @@ sendCommand h fc = do
     print $ "Recieved: " <> resp
     return resp
 
+sendCommands :: Handle -> [FTPCommand] -> IO [C.ByteString]
+sendCommands h = mapM (sendCommand h)
+
 createHandle :: String -> Int -> IO Handle
 createHandle host port = do
     let hints = defaultHints {
@@ -163,6 +168,5 @@ getAllLineResp h = getAllLineResp' h []
 nlst :: Handle -> [String] -> IO C.ByteString
 nlst h args = do
     th <- createTransferHandlePasv h
-    print =<< sendCommand h (RType TA)
-    print =<< sendCommand h (Nlst args)
+    sendCommands h [RType TA, Nlst args]
     getAllLineResp th

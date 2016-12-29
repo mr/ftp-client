@@ -4,7 +4,9 @@ module Network.FTP.Client (
     pasv,
     nlst,
     createTransferHandlePasv,
-    sendCommand
+    sendCommand,
+    FTPCommand(..),
+    RTypeCode(..)
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -119,7 +121,7 @@ createHandle host port = do
     socketToHandle sock ReadWriteMode
 
 withHandle :: String -> Int -> (Handle -> IO a) -> IO a
-withHandle host port f = bracket (createHandle host port) hClose f
+withHandle host port = bracket (createHandle host port) hClose
 
 withFTP :: String -> Int -> (Handle -> C.ByteString -> IO a) -> IO a
 withFTP host port f = withHandle host port $ \h -> getMultiLineResp h >>= f h
@@ -131,6 +133,9 @@ createTransferHandlePasv ch = do
     print $ "Port: " <> show port
     th <- createHandle host port
     return th
+
+withTransferHandlePasv :: Handle -> (Handle -> IO a) -> IO a
+withTransferHandlePasv ch = bracket (createTransferHandlePasv ch) hClose
 
 login :: Handle -> String -> String -> IO C.ByteString
 login h user pass = do

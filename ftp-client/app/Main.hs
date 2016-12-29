@@ -10,3 +10,4 @@ main = do
     withFTP host port $ \h welcome -> do
         print welcome
         print =<< login h user pass
+        print =<< nlst h []

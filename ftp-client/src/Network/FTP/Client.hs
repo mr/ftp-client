@@ -2,11 +2,13 @@ module Network.FTP.Client (
     withFTP,
     login,
     pasv,
+    nlst,
     createTransferHandlePasv,
     sendCommand
 ) where
 
 import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString as B
 import Data.List
 import Data.Attoparsec.ByteString.Char8
 import Network.Socket
@@ -14,14 +16,19 @@ import System.IO
 import Data.Monoid ((<>))
 import Control.Exception
 import Control.Monad
+import Data.Bits
+
+import Debug.Trace
 
 parse227 :: Parser (String, Int)
 parse227 = do
     string "227"
-    skipSpace
+    skipWhile (/= '(') *> char '('
     [h1,h2,h3,h4,p1,p2] <- many1 digit `sepBy` char ','
     let host = intercalate "." [h1,h2,h3,h4]
-        port = read $ p1 <> p2
+        highBits = read p1
+        lowBits = read p2
+        port = (highBits `shift` 8) + lowBits
     return (host, port)
 
 data ResponseStatus
@@ -50,16 +57,20 @@ data FTPCommand
     = User String
     | Pass String
     | Acct String
-    | Abor
     | RType RTypeCode
+    | Retr String
+    | Nlst [String]
+    | Abor
     | Pasv
 
 serializeCommand :: FTPCommand -> String
 serializeCommand (User user) = "USER " <> user
 serializeCommand (Pass pass) = "PASS " <> pass
 serializeCommand (Acct acct) = "ACCT " <> acct
-serializeCommand Abor        = "ABOR"
 serializeCommand (RType rt)  = "TYPE " <> serialzeRTypeCode rt
+serializeCommand (Retr file) = "RETR " <> file
+serializeCommand (Nlst args) = "NLST " <> intercalate " " args
+serializeCommand Abor        = "ABOR"
 serializeCommand Pasv        = "PASV"
 
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
@@ -86,8 +97,12 @@ loopMultiLine h code line = do
 
 sendCommand :: Handle -> FTPCommand -> IO C.ByteString
 sendCommand h fc = do
-    C.hPut h $ C.pack $ serializeCommand fc <> "\r\n"
-    getMultiLineResp h
+    let command = serializeCommand fc
+    print $ "Sending: " <> command
+    C.hPut h $ C.pack $ command <> "\r\n"
+    resp <- getMultiLineResp h
+    print $ "Recieved: " <> resp
+    return resp
 
 createHandle :: String -> Int -> IO Handle
 createHandle host port = do
@@ -96,9 +111,11 @@ createHandle host port = do
         addrSocketType = Stream
     }
     addr:_ <- getAddrInfo (Just hints) (Just host) (Just $ show port)
+    print $ "Addr: " <> show addr
 
     sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
     connect sock (addrAddress addr)
+    print "Connected"
     socketToHandle sock ReadWriteMode
 
 withHandle :: String -> Int -> (Handle -> IO a) -> IO a
@@ -110,8 +127,9 @@ withFTP host port f = withHandle host port $ \h -> getMultiLineResp h >>= f h
 createTransferHandlePasv :: Handle -> IO Handle
 createTransferHandlePasv ch = do
     (host, port) <- pasv ch
+    print $ "Host: " <> host
+    print $ "Port: " <> show port
     th <- createHandle host port
-    void $ getMultiLineResp th
     return th
 
 login :: Handle -> String -> String -> IO C.ByteString
@@ -124,3 +142,22 @@ pasv h = do
     resp <- sendCommand h Pasv
     let (Right (host, port)) = parseOnly parse227 resp
     return (host, port)
+
+getAllLineResp :: Handle -> IO C.ByteString
+getAllLineResp h = getAllLineResp' h []
+    where
+        getAllLineResp' h ret = do
+            eof <- hIsEOF h
+            if eof
+                then return $ C.intercalate "\n" ret
+                else do
+                    line <- getLineResp h
+                    getAllLineResp' h (ret <> [line])
+
+
+nlst :: Handle -> [String] -> IO C.ByteString
+nlst h args = do
+    th <- createTransferHandlePasv h
+    print =<< sendCommand h (RType TA)
+    print =<< sendCommand h (Nlst args)
+    getAllLineResp th

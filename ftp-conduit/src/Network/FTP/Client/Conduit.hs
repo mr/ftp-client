@@ -1,6 +1,20 @@
 module Network.FTP.Client.Conduit (
-    someFunc
+    nlst
 ) where
 
-someFunc :: IO ()
-someFunc = print "Hello World"
+import Data.Conduit.Binary
+import Data.Conduit
+import Control.Monad.IO.Class
+import System.IO
+import Network.FTP.Client
+import qualified Data.ByteString as B
+import Data.ByteString (ByteString)
+
+nlst :: MonadIO m => Handle -> [String] -> Producer m ByteString
+nlst h args = do
+        th <- liftIO $ do
+            th <- createTransferHandlePasv h
+            print =<< sendCommand h (RType TA)
+            print =<< sendCommand h (Nlst args)
+            return th
+        sourceHandle th

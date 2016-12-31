@@ -3,11 +3,15 @@ module Network.FTP.Client (
     login,
     pasv,
     nlst,
-    createTransferHandlePasv,
+    createDataConnectionPasv,
     sendCommand,
     sendCommands,
     FTPCommand(..),
     RTypeCode(..),
+    ControlConnection(..),
+    ccClose,
+    DataConnection(..),
+    dcClose,
     getLineResp
 ) where
 
@@ -34,6 +38,15 @@ parse227 = do
         lowBits = read p2
         port = (highBits `shift` 8) + lowBits
     return (host, port)
+
+newtype ControlConnection = CC Handle
+newtype DataConnection = DC Handle
+
+ccClose :: ControlConnection -> IO ()
+ccClose (CC h) = hClose h
+
+dcClose :: DataConnection -> IO ()
+dcClose (DC h) = hClose h
 
 data ResponseStatus
     = Wait
@@ -73,6 +86,7 @@ serializeCommand (Pass pass) = "PASS " <> pass
 serializeCommand (Acct acct) = "ACCT " <> acct
 serializeCommand (RType rt)  = "TYPE " <> serialzeRTypeCode rt
 serializeCommand (Retr file) = "RETR " <> file
+serializeCommand (Nlst [])   = "NLST"
 serializeCommand (Nlst args) = "NLST " <> intercalate " " args
 serializeCommand Abor        = "ABOR"
 serializeCommand Pasv        = "PASV"
@@ -99,8 +113,8 @@ loopMultiLine h code line = do
         then return multiLine
         else loopMultiLine h nextCode multiLine
 
-sendCommand :: Handle -> FTPCommand -> IO C.ByteString
-sendCommand h fc = do
+sendCommand :: ControlConnection -> FTPCommand -> IO C.ByteString
+sendCommand (CC h) fc = do
     let command = serializeCommand fc
     print $ "Sending: " <> command
     C.hPut h $ C.pack $ command <> "\r\n"
@@ -108,8 +122,8 @@ sendCommand h fc = do
     print $ "Recieved: " <> resp
     return resp
 
-sendCommands :: Handle -> [FTPCommand] -> IO [C.ByteString]
-sendCommands h = mapM (sendCommand h)
+sendCommands :: ControlConnection -> [FTPCommand] -> IO [C.ByteString]
+sendCommands cc = mapM (sendCommand cc)
 
 createHandle :: String -> Int -> IO Handle
 createHandle host port = do
@@ -128,28 +142,28 @@ createHandle host port = do
 withHandle :: String -> Int -> (Handle -> IO a) -> IO a
 withHandle host port = bracket (createHandle host port) hClose
 
-withFTP :: String -> Int -> (Handle -> C.ByteString -> IO a) -> IO a
-withFTP host port f = withHandle host port $ \h -> getMultiLineResp h >>= f h
+withFTP :: String -> Int -> (ControlConnection -> C.ByteString -> IO a) -> IO a
+withFTP host port f = withHandle host port $ \h -> getMultiLineResp h >>= f (CC h)
 
-createTransferHandlePasv :: Handle -> IO Handle
-createTransferHandlePasv ch = do
+createDataConnectionPasv :: ControlConnection -> IO DataConnection
+createDataConnectionPasv ch = do
     (host, port) <- pasv ch
     print $ "Host: " <> host
     print $ "Port: " <> show port
     th <- createHandle host port
-    return th
+    return $ DC th
 
-withTransferHandlePasv :: Handle -> (Handle -> IO a) -> IO a
-withTransferHandlePasv ch = bracket (createTransferHandlePasv ch) hClose
+withDataConnectionPasv :: ControlConnection -> (DataConnection -> IO a) -> IO a
+withDataConnectionPasv cc = bracket (createDataConnectionPasv cc) (\(DC h) -> hClose h)
 
-login :: Handle -> String -> String -> IO C.ByteString
-login h user pass = do
-    sendCommand h (User user)
-    sendCommand h (Pass pass)
+login :: ControlConnection -> String -> String -> IO C.ByteString
+login cc user pass = do
+    sendCommand cc (User user)
+    sendCommand cc (Pass pass)
 
-pasv :: Handle -> IO (String, Int)
-pasv h = do
-    resp <- sendCommand h Pasv
+pasv :: ControlConnection -> IO (String, Int)
+pasv cc = do
+    resp <- sendCommand cc Pasv
     let (Right (host, port)) = parseOnly parse227 resp
     return (host, port)
 
@@ -164,9 +178,7 @@ getAllLineResp h = getAllLineResp' h []
                     line <- getLineResp h
                     getAllLineResp' h (ret <> [line])
 
-
-nlst :: Handle -> [String] -> IO C.ByteString
-nlst h args = do
-    th <- createTransferHandlePasv h
-    sendCommands h [RType TA, Nlst args]
-    getAllLineResp th
+nlst :: ControlConnection -> [String] -> IO C.ByteString
+nlst cc args = withDataConnectionPasv cc $ \(DC h) -> do
+    sendCommands cc [RType TA, Nlst args]
+    getAllLineResp h

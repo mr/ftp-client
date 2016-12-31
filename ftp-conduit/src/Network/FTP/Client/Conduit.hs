@@ -7,18 +7,23 @@ import Data.Conduit
 import Control.Monad.IO.Class
 import System.IO
 import Network.FTP.Client
-    ( createTransferHandlePasv
+    ( createDataConnectionPasv
     , sendCommand
     , sendCommands
     , FTPCommand(..)
     , RTypeCode(..)
     , getLineResp
+    , ControlConnection(..)
+    , ccClose
+    , DataConnection(..)
+    , dcClose
     )
 import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
+import Control.Monad.Trans.Resource
 
-getAllLineRespC :: MonadIO m => Handle -> Producer m ByteString
-getAllLineRespC h = loop
+getAllLineRespC :: MonadIO m => DataConnection -> Producer m ByteString
+getAllLineRespC (DC h) = loop
     where
         loop = do
             eof <- liftIO $ hIsEOF h
@@ -29,10 +34,12 @@ getAllLineRespC h = loop
                     yield line
                     loop
 
-nlst :: MonadIO m => Handle -> [String] -> Producer m ByteString
-nlst h args = do
-        th <- liftIO $ do
-            th <- createTransferHandlePasv h
-            sendCommands h [RType TA, Nlst args]
-            return th
-        getAllLineRespC th
+nlst :: MonadResource m => ControlConnection -> [String] -> Producer m ByteString
+nlst cc args = bracketP
+    (do
+        dc <- createDataConnectionPasv cc
+        sendCommands cc [RType TA, Nlst args]
+        return dc
+    )
+    dcClose
+    getAllLineRespC

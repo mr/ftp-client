@@ -5,7 +5,7 @@ import System.Environment
 
 main :: IO ()
 main = do
-    [host, sPort, user, pass, fileNamme] <- getArgs
+    [host, sPort, user, pass, fileName] <- getArgs
     let port = read sPort
     withFTP host port $ \h welcome -> do
         print welcome

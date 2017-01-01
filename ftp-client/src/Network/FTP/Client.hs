@@ -3,6 +3,7 @@ module Network.FTP.Client (
     login,
     pasv,
     nlst,
+    retr,
     createDataSocket,
     sendCommand,
     sendCommands,
@@ -252,3 +253,6 @@ port cc ha pn = sendCommand cc (Port ha pn)
 
 nlst :: ControlConnection -> [String] -> IO C.ByteString
 nlst cc args = sendDataCommand cc Passive [RType TA, Nlst args] getAllLineResp
+
+retr :: ControlConnection -> String -> IO C.ByteString
+retr cc path = sendDataCommand cc Passive [RType TI, Retr path] (\(DC h) -> C.hGetContents h)

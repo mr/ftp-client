@@ -3,6 +3,7 @@ module Main where
 import Network.FTP.Client
 import qualified Network.FTP.Client.Conduit as FC
 import Conduit
+import qualified Data.Conduit.Binary as CB
 import System.Environment
 
 main :: IO ()
@@ -13,5 +14,5 @@ main = do
         print welcome
         print =<< login h user pass
         runConduitRes
-            $ FC.nlst h []
-            .| mapM_C (liftIO . print)
+            $ FC.retr h ".bash_profile"
+            .| CB.sinkFile "test_bash_profile"

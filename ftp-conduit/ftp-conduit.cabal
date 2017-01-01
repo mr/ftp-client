@@ -23,7 +23,7 @@ library
                      , bytestring
                      , resourcet
   default-language:    Haskell2010
-  default-extensions:  RankNTypes
+  default-extensions:  RankNTypes, OverloadedStrings
 
 executable ftp-conduit-exe
   hs-source-dirs:      app

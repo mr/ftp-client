@@ -4,6 +4,7 @@ module Network.FTP.Client (
     pasv,
     nlst,
     retr,
+    stor,
     createDataSocket,
     sendCommand,
     sendCommands,
@@ -16,7 +17,9 @@ module Network.FTP.Client (
     DataSocket(..),
     getLineResp,
     PortActivity(..),
-    createSendDataCommand
+    createSendDataCommand,
+    getMultiLineResp,
+    sendLine
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -29,8 +32,6 @@ import Data.Monoid ((<>), mconcat)
 import Control.Exception
 import Control.Monad
 import Data.Bits
-
-import Debug.Trace
 
 parse227 :: Parser (String, Int)
 parse227 = do
@@ -85,6 +86,7 @@ data FTPCommand
     | Retr String
     | Nlst [String]
     | Port HostAddress PortNumber
+    | Stor String
     | Abor
     | Pasv
 
@@ -104,6 +106,7 @@ serializeCommand (Retr file)  = "RETR " <> file
 serializeCommand (Nlst [])    = "NLST"
 serializeCommand (Nlst args)  = "NLST " <> intercalate " " args
 serializeCommand (Port ha pn) = "PORT " <> formatPort ha pn
+serializeCommand (Stor loc)   = "STOR " <> loc
 serializeCommand Abor         = "ABOR"
 serializeCommand Pasv         = "PASV"
 
@@ -129,11 +132,14 @@ loopMultiLine h code line = do
         then return multiLine
         else loopMultiLine h nextCode multiLine
 
+sendLine :: Handle -> C.ByteString -> IO ()
+sendLine h dat = C.hPut h $ dat <> "\r\n"
+
 sendCommand :: ControlConnection -> FTPCommand -> IO C.ByteString
 sendCommand (CC h) fc = do
     let command = serializeCommand fc
     print $ "Sending: " <> command
-    C.hPut h $ C.pack $ command <> "\r\n"
+    sendLine h $ C.pack command
     resp <- getMultiLineResp h
     print $ "Recieved: " <> resp
     return resp
@@ -237,7 +243,11 @@ sendDataCommand
     -> [FTPCommand]
     -> (DataConnection -> IO a)
     -> IO a
-sendDataCommand cc pa cmds = bracket (createSendDataCommand cc pa cmds) dcClose
+sendDataCommand cc@(CC ch) pa cmds f = do
+    x <- bracket (createSendDataCommand cc pa cmds) dcClose f
+    resp <- getMultiLineResp ch
+    print $ "Recieved: " <> resp
+    return x
 
 login :: ControlConnection -> String -> String -> IO C.ByteString
 login cc user pass = mconcat <$> sendCommands cc [User user, Pass pass]
@@ -256,3 +266,10 @@ nlst cc args = sendDataCommand cc Passive [RType TA, Nlst args] getAllLineResp
 
 retr :: ControlConnection -> String -> IO C.ByteString
 retr cc path = sendDataCommand cc Passive [RType TI, Retr path] (\(DC h) -> C.hGetContents h)
+
+stor :: ControlConnection -> String -> B.ByteString -> RTypeCode -> IO ()
+stor cc loc dat rtype = do
+    sendDataCommand cc Passive [RType rtype, Stor loc] $ \(DC h) ->
+        case rtype of
+            TA -> void $ mapM (sendLine h) $ C.split '\n' dat
+            TI -> C.hPut h dat

@@ -30,6 +30,7 @@ executable ftp-client-exe
   build-depends:       base
                      , ftp-client
   default-language:    Haskell2010
+  default-extensions:  OverloadedStrings
 
 test-suite ftp-client-test
   type:                exitcode-stdio-1.0

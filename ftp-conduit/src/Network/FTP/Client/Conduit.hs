@@ -1,8 +1,9 @@
 module Network.FTP.Client.Conduit (
-    nlst
+    nlst,
+    retr
 ) where
 
-import Data.Conduit.Binary
+import qualified Data.Conduit.Binary as CB
 import Data.Conduit
 import Control.Monad.IO.Class
 import System.IO
@@ -47,3 +48,6 @@ sourceDataCommand cc pa cmds = bracketP (createSendDataCommand cc pa cmds) dcClo
 
 nlst :: MonadResource m => ControlConnection -> [String] -> Producer m ByteString
 nlst cc args = sourceDataCommand cc Passive [RType TA, Nlst args] getAllLineRespC
+
+retr :: MonadResource m => ControlConnection -> String -> Producer m ByteString
+retr cc path = sourceDataCommand cc Passive [RType TI, Retr path] (\(DC h) -> CB.sourceHandle h)

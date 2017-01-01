@@ -62,7 +62,7 @@ sourceDataCommand
 sourceDataCommand cc@(CC ch) pa cmds f = do
     x <- bracketP (createSendDataCommand cc pa cmds) dcClose f
     resp <- liftIO $ getMultiLineResp ch
-    liftIO $ print $ "Recieved: " <> resp
+    liftIO $ print $ "Recieved: " <> (show resp)
     return x
 
 nlst :: MonadResource m => ControlConnection -> [String] -> Producer m ByteString

@@ -35,7 +35,6 @@ import Data.Bits
 
 parse227 :: Parser (String, Int)
 parse227 = do
-    string "227"
     skipWhile (/= '(') *> char '('
     [h1,h2,h3,h4,p1,p2] <- many1 digit `sepBy` char ','
     let host = intercalate "." [h1,h2,h3,h4]
@@ -54,12 +53,25 @@ ccClose (CC h) = hClose h
 dcClose :: DataConnection -> IO ()
 dcClose (DC h) = hClose h
 
+dcGetContents :: DataConnection -> IO C.ByteString
+dcGetContents (DC h) = C.hGetContents h
+
+data FTPResponse = FTPResponse {
+    frStatus :: ResponseStatus,
+    frCode :: Int,
+    frMessage :: C.ByteString
+}
+
+instance Show FTPResponse where
+    show fr = (show $ frCode fr) <> " " <> (C.unpack $ frMessage fr)
+
 data ResponseStatus
     = Wait
     | Success
     | Continue
     | FailureRetry
     | Failure
+    deriving (Show)
 
 responseStatus :: C.ByteString -> ResponseStatus
 responseStatus cbs =
@@ -87,6 +99,7 @@ data FTPCommand
     | Nlst [String]
     | Port HostAddress PortNumber
     | Stor String
+    | List [String]
     | Abor
     | Pasv
 
@@ -107,6 +120,8 @@ serializeCommand (Nlst [])    = "NLST"
 serializeCommand (Nlst args)  = "NLST " <> intercalate " " args
 serializeCommand (Port ha pn) = "PORT " <> formatPort ha pn
 serializeCommand (Stor loc)   = "STOR " <> loc
+serializeCommand (List [])    = "LIST"
+serializeCommand (List args)  = "LIST " <> intercalate " " args
 serializeCommand Abor         = "ABOR"
 serializeCommand Pasv         = "PASV"
 
@@ -115,13 +130,17 @@ stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
 getLineResp :: Handle -> IO C.ByteString
 getLineResp h = stripCLRF <$> C.hGetLine h
 
-getMultiLineResp :: Handle -> IO C.ByteString
+getMultiLineResp :: Handle -> IO FTPResponse
 getMultiLineResp h = do
     line <- getLineResp h
     let (code, rest) = C.splitAt 3 line
-    if C.head rest == '-'
+    message <- if C.head rest == '-'
         then loopMultiLine h code line
         else return line
+    return $ FTPResponse
+        (responseStatus code)
+        (read $ C.unpack code)
+        (C.drop 4 message)
 
 loopMultiLine :: Handle -> C.ByteString -> C.ByteString -> IO C.ByteString
 loopMultiLine h code line = do
@@ -135,16 +154,16 @@ loopMultiLine h code line = do
 sendLine :: Handle -> C.ByteString -> IO ()
 sendLine h dat = C.hPut h $ dat <> "\r\n"
 
-sendCommand :: ControlConnection -> FTPCommand -> IO C.ByteString
+sendCommand :: ControlConnection -> FTPCommand -> IO FTPResponse
 sendCommand (CC h) fc = do
     let command = serializeCommand fc
     print $ "Sending: " <> command
     sendLine h $ C.pack command
     resp <- getMultiLineResp h
-    print $ "Recieved: " <> resp
+    print $ "Recieved: " <> (show resp)
     return resp
 
-sendCommands :: ControlConnection -> [FTPCommand] -> IO [C.ByteString]
+sendCommands :: ControlConnection -> [FTPCommand] -> IO [FTPResponse]
 sendCommands cc = mapM (sendCommand cc)
 
 createSocket :: Maybe String -> Int -> AddrInfo -> IO (Socket, AddrInfo)
@@ -184,7 +203,7 @@ createHandle host portNum = do
 withHandle :: String -> Int -> (Handle -> IO a) -> IO a
 withHandle host portNum = bracket (createHandle host portNum) hClose
 
-withFTP :: String -> Int -> (ControlConnection -> C.ByteString -> IO a) -> IO a
+withFTP :: String -> Int -> (ControlConnection -> FTPResponse -> IO a) -> IO a
 withFTP host portNum f = withHandle host portNum $ \h -> do
     resp <- getMultiLineResp h
     f (CC h) resp
@@ -246,26 +265,32 @@ sendDataCommand
 sendDataCommand cc@(CC ch) pa cmds f = do
     x <- bracket (createSendDataCommand cc pa cmds) dcClose f
     resp <- getMultiLineResp ch
-    print $ "Recieved: " <> resp
+    print $ "Recieved: " <> (show resp)
     return x
 
-login :: ControlConnection -> String -> String -> IO C.ByteString
-login cc user pass = mconcat <$> sendCommands cc [User user, Pass pass]
+login :: ControlConnection -> String -> String -> IO FTPResponse
+login cc user pass = last <$> sendCommands cc [User user, Pass pass]
 
 pasv :: ControlConnection -> IO (String, Int)
 pasv cc = do
     resp <- sendCommand cc Pasv
-    let (Right (host, portNum)) = parseOnly parse227 resp
+    let (Right (host, portNum)) = parseOnly parse227 (frMessage resp)
     return (host, portNum)
 
-port :: ControlConnection -> HostAddress -> PortNumber -> IO C.ByteString
+port :: ControlConnection -> HostAddress -> PortNumber -> IO FTPResponse
 port cc ha pn = sendCommand cc (Port ha pn)
+
+acct :: ControlConnection -> String -> IO FTPResponse
+acct cc pass = sendCommand cc (Acct pass)
 
 nlst :: ControlConnection -> [String] -> IO C.ByteString
 nlst cc args = sendDataCommand cc Passive [RType TA, Nlst args] getAllLineResp
 
 retr :: ControlConnection -> String -> IO C.ByteString
-retr cc path = sendDataCommand cc Passive [RType TI, Retr path] (\(DC h) -> C.hGetContents h)
+retr cc path = sendDataCommand cc Passive [RType TI, Retr path] dcGetContents
+
+list :: ControlConnection -> [String] -> IO C.ByteString
+list cc args = sendDataCommand cc Passive [RType TA, List args] dcGetContents
 
 stor :: ControlConnection -> String -> B.ByteString -> RTypeCode -> IO ()
 stor cc loc dat rtype = do

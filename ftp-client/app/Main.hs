@@ -2,12 +2,14 @@ module Main where
 
 import Network.FTP.Client
 import System.Environment
+import Control.Monad
 
 main :: IO ()
 main = do
-    [host, sPort, user, pass, fileName] <- getArgs
+    [host, sPort, user, pass] <- getArgs
     let port = read sPort
-    withFTP host port $ \h welcome -> do
+    withFTP host port $ \cc welcome -> do
         print welcome
-        print =<< login h user pass
-        stor h fileName "dank\nmemes" TI
+        login cc user pass
+        cwd cc "files"
+        void $ pwd cc

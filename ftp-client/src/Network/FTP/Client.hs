@@ -5,6 +5,14 @@ module Network.FTP.Client (
     nlst,
     retr,
     stor,
+    rename,
+    dele,
+    cwd,
+    size,
+    mkd,
+    rmd,
+    pwd,
+    quit,
     createDataSocket,
     sendCommand,
     sendCommands,
@@ -100,8 +108,21 @@ data FTPCommand
     | Port HostAddress PortNumber
     | Stor String
     | List [String]
+    | Rnfr String
+    | Rnto String
+    | Dele String
+    | Size String
+    | Mkd String
+    | Rmd String
+    | Cwd String
+    | Cdup
+    | Pwd
     | Abor
     | Pasv
+    | Quit
+
+instance Show FTPCommand where
+    show = serializeCommand
 
 formatPort :: HostAddress -> PortNumber -> String
 formatPort ha pn =
@@ -122,8 +143,18 @@ serializeCommand (Port ha pn) = "PORT " <> formatPort ha pn
 serializeCommand (Stor loc)   = "STOR " <> loc
 serializeCommand (List [])    = "LIST"
 serializeCommand (List args)  = "LIST " <> intercalate " " args
+serializeCommand (Rnfr from)  = "RNFR " <> from
+serializeCommand (Rnto to)    = "RNTO " <> to
+serializeCommand (Dele file)  = "DELE " <> file
+serializeCommand (Size file)  = "SIZE " <> file
+serializeCommand (Mkd dir)    = "MKD " <> dir
+serializeCommand (Rmd dir)    = "RMD " <> dir
+serializeCommand (Cwd dir)    = "CWD " <> dir
+serializeCommand Cdup         = "CDUP"
+serializeCommand Pwd          = "PWD"
 serializeCommand Abor         = "ABOR"
 serializeCommand Pasv         = "PASV"
+serializeCommand Quit         = "QUIT"
 
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
 
@@ -298,3 +329,36 @@ stor cc loc dat rtype = do
         case rtype of
             TA -> void $ mapM (sendLine h) $ C.split '\n' dat
             TI -> C.hPut h dat
+
+rename :: ControlConnection -> String -> String -> IO FTPResponse
+rename cc from to = do
+        res <- sendCommand cc (Rnfr from)
+        case frStatus res of
+            Continue -> sendCommand cc (Rnto to)
+            _ -> return res
+
+dele :: ControlConnection -> String -> IO FTPResponse
+dele cc file = sendCommand cc (Dele file)
+
+cwd :: ControlConnection -> String -> IO FTPResponse
+cwd cc dir = do
+    sendCommand cc $ if dir == ".."
+        then Cdup
+        else Cwd dir
+
+size :: ControlConnection -> String -> IO Int
+size cc file = do
+    resp <- sendCommand cc (Size file)
+    return $ read $ C.unpack $ frMessage resp
+
+mkd :: ControlConnection -> String -> IO C.ByteString
+mkd cc dir = frMessage <$> sendCommand cc (Mkd dir)
+
+rmd :: ControlConnection -> String -> IO FTPResponse
+rmd cc dir = sendCommand cc (Rmd dir)
+
+pwd :: ControlConnection -> IO C.ByteString
+pwd cc = frMessage <$> sendCommand cc Pwd
+
+quit :: ControlConnection -> IO FTPResponse
+quit cc = sendCommand cc Quit

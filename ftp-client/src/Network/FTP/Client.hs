@@ -51,6 +51,11 @@ parse227 = do
         portNum = (highBits `shift` 8) + lowBits
     return (host, portNum)
 
+parse257 :: Parser String
+parse257 = do
+    char '"'
+    C.unpack <$> takeTill (== '"')
+
 newtype ControlConnection = CC Handle
 newtype DataConnection = DC Handle
 newtype DataSocket = DS Socket
@@ -351,14 +356,20 @@ size cc file = do
     resp <- sendCommand cc (Size file)
     return $ read $ C.unpack $ frMessage resp
 
-mkd :: ControlConnection -> String -> IO C.ByteString
-mkd cc dir = frMessage <$> sendCommand cc (Mkd dir)
+mkd :: ControlConnection -> String -> IO String
+mkd cc dir = do
+    resp <- sendCommand cc (Mkd dir)
+    let (Right dir) = parseOnly parse257 (frMessage resp)
+    return dir
 
 rmd :: ControlConnection -> String -> IO FTPResponse
 rmd cc dir = sendCommand cc (Rmd dir)
 
-pwd :: ControlConnection -> IO C.ByteString
-pwd cc = frMessage <$> sendCommand cc Pwd
+pwd :: ControlConnection -> IO String
+pwd cc = do
+    resp <- sendCommand cc Pwd
+    let (Right dir) = parseOnly parse257 (frMessage resp)
+    return dir
 
 quit :: ControlConnection -> IO FTPResponse
 quit cc = sendCommand cc Quit

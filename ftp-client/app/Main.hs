@@ -12,4 +12,4 @@ main = do
         print welcome
         login cc user pass
         cwd cc "files"
-        void $ pwd cc
+        print =<< pwd cc

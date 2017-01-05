@@ -8,8 +8,7 @@ main :: IO ()
 main = do
     [host, sPort, user, pass] <- getArgs
     let port = read sPort
-    withFTP host port $ \cc welcome -> do
+    withFTP host port $ \h welcome -> do
         print welcome
-        login cc user pass
-        cwd cc "files"
-        print =<< pwd cc
+        login h user pass
+        print =<< nlst h []

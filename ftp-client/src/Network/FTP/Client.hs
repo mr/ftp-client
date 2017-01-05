@@ -57,8 +57,9 @@ parse257 = do
 data Handle = Handle
     { send :: ByteString -> IO ()
     , sendLine :: ByteString -> IO ()
-    , recv :: IO ByteString
+    , recv :: Int -> IO ByteString
     , recvLine :: IO ByteString
+    , recvAll :: IO ByteString
     , isEOF :: IO Bool
     }
 
@@ -237,8 +238,10 @@ sIOHandleImpl :: SIO.Handle -> Handle
 sIOHandleImpl h = Handle
     { send = C.hPut h
     , sendLine = C.hPutStrLn h
-    , recv = C.hGetContents h
+    , recv = C.hGetSome h
     , recvLine = C.hGetLine h
+    , recvAll = C.hGetContents h
+    , isEOF = SIO.hIsEOF h
     }
 
 withHandle :: String -> Int -> (Handle -> IO a) -> IO a
@@ -300,20 +303,20 @@ createSendDataCommand h pa cmds = do
     S.socketToHandle acceptedSock SIO.ReadWriteMode
 
 withDataCommand
-    :: Handle
+    :: Show a
+    => Handle
     -> PortActivity
     -> [FTPCommand]
     -> (Handle -> IO a)
     -> IO a
-withDataCommand ch pa cmds f = bracket
-    (createSendDataCommand ch pa cmds)
-    SIO.hClose
-    (\h -> do
-        x <- f $ sIOHandleImpl h
-        resp <- getMultiLineResp ch
-        print $ "Recieved: " <> (show resp)
-        return x
-    )
+withDataCommand ch pa cmds f = do
+    x <- bracket
+        (createSendDataCommand ch pa cmds)
+        SIO.hClose
+        (f . sIOHandleImpl)
+    resp <- getMultiLineResp ch
+    print $ "Recieved: " <> (show resp)
+    return x
 
 login :: Handle -> String -> String -> IO FTPResponse
 login h user pass = last <$> sendCommands h [User user, Pass pass]
@@ -334,10 +337,10 @@ nlst :: Handle -> [String] -> IO ByteString
 nlst h args = withDataCommand h Passive [RType TA, Nlst args] getAllLineResp
 
 retr :: Handle -> String -> IO ByteString
-retr h path = withDataCommand h Passive [RType TI, Retr path] recv
+retr h path = withDataCommand h Passive [RType TI, Retr path] recvAll
 
 list :: Handle -> [String] -> IO ByteString
-list h args = withDataCommand h Passive [RType TA, List args] recv
+list h args = withDataCommand h Passive [RType TA, List args] recvAll
 
 stor :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
 stor h loc dat rtype = do

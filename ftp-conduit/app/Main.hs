@@ -8,11 +8,11 @@ import System.Environment
 
 main :: IO ()
 main = do
-    [host, sPort, user, pass, fileName] <- getArgs
+    [host, sPort, user, pass, filename] <- getArgs
     let port = read sPort
     withFTP host port $ \h welcome -> do
         print welcome
         print =<< login h user pass
         runConduitRes
-            $ sourceFile fileName
-            .| FC.stor h fileName TI
+            $ FC.retr h filename
+            .| CB.sinkFile filename

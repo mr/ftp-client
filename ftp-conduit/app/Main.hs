@@ -14,5 +14,5 @@ main = do
         print welcome
         print =<< login h user pass
         runConduitRes
-            $ FC.retr h filename
-            .| CB.sinkFile filename
+            $ CB.sourceFile filename
+            .| FC.stor h filename TA

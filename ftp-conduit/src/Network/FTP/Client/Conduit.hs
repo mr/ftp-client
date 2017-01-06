@@ -27,16 +27,17 @@ import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
 import Control.Monad.Trans.Resource
 import Data.Monoid ((<>))
+import System.IO.Error
 
 getAllLineRespC :: MonadIO m => FTP.Handle -> Producer m ByteString
 getAllLineRespC h = loop
     where
         loop = do
-            eof <- liftIO $ FTP.isEOF h
-            if eof
+            line <- liftIO $ FTP.getLineResp h
+                `catchIOError` (\_ -> return "")
+            if B.null line
                 then return ()
                 else do
-                    line <- liftIO $ FTP.getLineResp h
                     yield line
                     loop
 
@@ -71,11 +72,11 @@ sourceHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
 sourceHandle h = loop
     where
         loop = do
-            eof <- liftIO $ FTP.isEOF h
-            if eof
+            bs <- liftIO $ FTP.recv h defaultChunkSize
+                `catchIOError` (\_ -> return "")
+            if B.null bs
                 then return ()
                 else do
-                    bs <- liftIO $ FTP.recv h defaultChunkSize
                     yield bs
                     loop
 
@@ -91,14 +92,17 @@ sinkHandle h = loop
                     loop
 
 nlst :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
-nlst cc args = sourceDataCommand cc Passive [RType TA, Nlst args] getAllLineRespC
+nlst ch args = sourceDataCommand ch Passive [RType TA, Nlst args] getAllLineRespC
 
 retr :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
-retr cc path = sourceDataCommand cc Passive [RType TI, Retr path] sourceHandle
+retr ch path = sourceDataCommand ch Passive [RType TI, Retr path] sourceHandle
+
+list :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
+list ch args = sourceDataCommand ch Passive [RType TA, List args] getAllLineRespC
 
 stor :: MonadResource m => FTP.Handle -> String -> RTypeCode -> Consumer ByteString m ()
-stor cc loc rtype = do
-    sourceDataCommand cc Passive [RType rtype, Stor loc] $ \dh ->
+stor ch loc rtype = do
+    sourceDataCommand ch Passive [RType rtype, Stor loc] $ \dh ->
         case rtype of
             TA -> sendAllLineC dh
             TI -> sinkHandle dh

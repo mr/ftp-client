@@ -1,5 +1,6 @@
 module Network.FTP.Client (
     withFTP,
+    withFTPS,
     login,
     pasv,
     nlst,
@@ -38,6 +39,9 @@ import Data.Monoid ((<>), mconcat)
 import Control.Exception
 import Control.Monad
 import Data.Bits
+import Network.Connection
+import System.IO.Error
+import Data.ByteString.Lazy.Internal (defaultChunkSize)
 
 parse227 :: Parser (String, Int)
 parse227 = do
@@ -59,8 +63,6 @@ data Handle = Handle
     , sendLine :: ByteString -> IO ()
     , recv :: Int -> IO ByteString
     , recvLine :: IO ByteString
-    , recvAll :: IO ByteString
-    , isEOF :: IO Bool
     }
 
 data FTPResponse = FTPResponse {
@@ -97,6 +99,8 @@ serialzeRTypeCode TI = "I"
 
 data PortActivity = Active | Passive
 
+data ProtType = P | C
+
 data FTPCommand
     = User String
     | Pass String
@@ -113,8 +117,12 @@ data FTPCommand
     | Size String
     | Mkd String
     | Rmd String
+    | Pbsz Int
+    | Prot ProtType
     | Cwd String
     | Cdup
+    | Ccc
+    | Auth
     | Pwd
     | Abor
     | Pasv
@@ -148,8 +156,13 @@ serializeCommand (Dele file)  = "DELE " <> file
 serializeCommand (Size file)  = "SIZE " <> file
 serializeCommand (Mkd dir)    = "MKD " <> dir
 serializeCommand (Rmd dir)    = "RMD " <> dir
+serializeCommand (Pbsz buf)   = "PBSZ " <> show buf
+serializeCommand (Prot P)     = "PROT P"
+serializeCommand (Prot C)     = "PROT C"
 serializeCommand (Cwd dir)    = "CWD " <> dir
 serializeCommand Cdup         = "CDUP"
+serializeCommand Ccc          = "CCC"
+serializeCommand Auth         = "AUTH TLS"
 serializeCommand Pwd          = "PWD"
 serializeCommand Abor         = "ABOR"
 serializeCommand Pasv         = "PASV"
@@ -197,6 +210,8 @@ sendCommand h fc = do
 sendCommands :: Handle -> [FTPCommand] -> IO [FTPResponse]
 sendCommands = mapM . sendCommand
 
+-- Control connection
+
 createSocket :: Maybe String -> Int -> S.AddrInfo -> IO (S.Socket, S.AddrInfo)
 createSocket host portNum hints = do
     addr:_ <- S.getAddrInfo (Just hints) host (Just $ show portNum)
@@ -240,21 +255,21 @@ sIOHandleImpl h = Handle
     , sendLine = C.hPutStrLn h
     , recv = C.hGetSome h
     , recvLine = C.hGetLine h
-    , recvAll = C.hGetContents h
-    , isEOF = SIO.hIsEOF h
     }
 
-withHandle :: String -> Int -> (Handle -> IO a) -> IO a
-withHandle host portNum f = bracket
+withSIOHandle :: String -> Int -> (Handle -> IO a) -> IO a
+withSIOHandle host portNum f = bracket
     (createSIOHandle host portNum)
     SIO.hClose
     (f . sIOHandleImpl)
 
 
 withFTP :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
-withFTP host portNum f = withHandle host portNum $ \h -> do
+withFTP host portNum f = withSIOHandle host portNum $ \h -> do
     resp <- getMultiLineResp h
     f h resp
+
+-- Data connection
 
 createDataSocketPasv :: Handle -> IO S.Socket
 createDataSocketPasv h = do
@@ -273,17 +288,6 @@ createDataSocketActive h = do
 createDataSocket :: PortActivity -> Handle -> IO S.Socket
 createDataSocket Active  = createDataSocketActive
 createDataSocket Passive = createDataSocketPasv
-
-getAllLineResp :: Handle -> IO ByteString
-getAllLineResp h = getAllLineResp' h []
-    where
-        getAllLineResp' h ret = do
-            eof <- isEOF h
-            if eof
-                then return $ C.intercalate "\n" ret
-                else do
-                    line <- getLineResp h
-                    getAllLineResp' h (ret <> [line])
 
 acceptData :: S.Socket -> PortActivity -> IO S.Socket
 acceptData sock Passive = return sock
@@ -318,6 +322,65 @@ withDataCommand ch pa cmds f = do
     print $ "Recieved: " <> (show resp)
     return x
 
+getAllLineResp :: Handle -> IO ByteString
+getAllLineResp h = getAllLineResp' h []
+    where
+        getAllLineResp' h ret = do
+            line <- getLineResp h
+                `catchIOError` (\_ -> return $ C.intercalate "\n" ret)
+            getAllLineResp' h (ret <> [line])
+
+recvAll :: Handle -> IO ByteString
+recvAll h = recvAll' ""
+    where
+        recvAll' bs = do
+            chunk <- recv h defaultChunkSize
+                `catchIOError` (\_ -> return bs)
+            recvAll' $ bs <> chunk
+
+-- TLS connection
+
+createTLSConnection :: String -> Int -> IO (FTPResponse, Connection)
+createTLSConnection host portNum = do
+    h <- createSIOHandle host portNum
+    let insecureH = sIOHandleImpl h
+    resp <- getMultiLineResp insecureH
+    sendCommand insecureH Auth
+    context <- initConnectionContext
+    let tlsSettings = TLSSettingsSimple
+            { settingDisableCertificateValidation = True
+            , settingDisableSession = False
+            , settingUseServerName = False
+            }
+        connectionParams = ConnectionParams
+            { connectionHostname = host
+            , connectionPort = toEnum . fromEnum $ portNum
+            , connectionUseSecure = Just tlsSettings
+            , connectionUseSocks = Nothing
+            }
+
+    conn <- connectFromHandle context h connectionParams
+    return (resp, conn)
+
+tlsHandleImpl :: Connection -> Handle
+tlsHandleImpl c = Handle
+    { send = connectionPut c
+    , sendLine = connectionPut c . (<> "\n")
+    , recv = connectionGetExact c
+    , recvLine = connectionGetLine maxBound c
+    }
+
+withTLSHandle :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
+withTLSHandle host portNum f = bracket
+    (createTLSConnection host portNum)
+    (\(_, conn) -> connectionClose conn)
+    (\(resp, conn) -> f (tlsHandleImpl conn) resp)
+
+withFTPS :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
+withFTPS host portNum = withTLSHandle host portNum
+
+-- Control commands
+
 login :: Handle -> String -> String -> IO FTPResponse
 login h user pass = last <$> sendCommands h [User user, Pass pass]
 
@@ -332,22 +395,6 @@ port h ha pn = sendCommand h (Port ha pn)
 
 acct :: Handle -> String -> IO FTPResponse
 acct h pass = sendCommand h (Acct pass)
-
-nlst :: Handle -> [String] -> IO ByteString
-nlst h args = withDataCommand h Passive [RType TA, Nlst args] getAllLineResp
-
-retr :: Handle -> String -> IO ByteString
-retr h path = withDataCommand h Passive [RType TI, Retr path] recvAll
-
-list :: Handle -> [String] -> IO ByteString
-list h args = withDataCommand h Passive [RType TA, List args] recvAll
-
-stor :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
-stor h loc dat rtype = do
-    withDataCommand h Passive [RType rtype, Stor loc] $ \dh ->
-        case rtype of
-            TA -> void $ mapM (sendCommandLine dh) $ C.split '\n' dat
-            TI -> send dh dat
 
 rename :: Handle -> String -> String -> IO FTPResponse
 rename h from to = do
@@ -387,3 +434,35 @@ pwd h = do
 
 quit :: Handle -> IO FTPResponse
 quit h = sendCommand h Quit
+
+-- TLS commands
+
+pbsz :: Handle -> Int -> IO FTPResponse
+pbsz h = sendCommand h . Pbsz
+
+prot :: Handle -> ProtType -> IO FTPResponse
+prot h = sendCommand h . Prot
+
+ccc :: Handle -> IO FTPResponse
+ccc h = sendCommand h Ccc
+
+auth :: Handle -> IO FTPResponse
+auth h = sendCommand h Auth
+
+-- Data commands
+
+nlst :: Handle -> [String] -> IO ByteString
+nlst h args = withDataCommand h Passive [RType TA, Nlst args] getAllLineResp
+
+retr :: Handle -> String -> IO ByteString
+retr h path = withDataCommand h Passive [RType TI, Retr path] recvAll
+
+list :: Handle -> [String] -> IO ByteString
+list h args = withDataCommand h Passive [RType TA, List args] recvAll
+
+stor :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
+stor h loc dat rtype = do
+    withDataCommand h Passive [RType rtype, Stor loc] $ \dh ->
+        case rtype of
+            TA -> void $ mapM (sendCommandLine dh) $ C.split '\n' dat
+            TI -> send dh dat

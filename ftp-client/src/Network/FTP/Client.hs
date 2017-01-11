@@ -27,9 +27,11 @@ module Network.FTP.Client (
     getLineResp,
     PortActivity(..),
     createSendDataCommand,
+    createTLSSendDataCommand,
     getMultiLineResp,
     sendCommandLine,
-    sIOHandleImpl
+    sIOHandleImpl,
+    tlsHandleImpl
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -405,8 +407,7 @@ createTLSSendDataCommand ch pa cmds = do
     connectTLS h hostName (fromEnum sPort)
 
 withTLSDataCommand
-    :: Show a
-    => Handle
+    :: Handle
     -> PortActivity
     -> [FTPCommand]
     -> (Handle -> IO a)

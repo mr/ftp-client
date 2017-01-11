@@ -10,9 +10,9 @@ main :: IO ()
 main = do
     [host, sPort, user, pass, filename] <- getArgs
     let port = read sPort
-    withFTP host port $ \h welcome -> do
+    withFTPS host port $ \h welcome -> do
         print welcome
         print =<< login h user pass
         runConduitRes
-            $ FC.retr h filename
+            $ FC.retrS h filename
             .| CB.sinkFile filename

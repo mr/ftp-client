@@ -6,9 +6,9 @@ import Control.Monad
 
 main :: IO ()
 main = do
-    [host, sPort, user, pass] <- getArgs
+    [host, sPort, user, pass, filename] <- getArgs
     let port = read sPort
     withFTPS host port $ \h welcome -> do
         print welcome
         login h user pass
-        print =<< nlstS h []
+        print =<< retrS h filename

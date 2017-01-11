@@ -15,6 +15,9 @@ module Network.FTP.Client (
     pwd,
     quit,
     nlstS,
+    retrS,
+    listS,
+    storS,
     createDataSocket,
     sendCommand,
     sendCommands,
@@ -370,7 +373,7 @@ tlsHandleImpl :: Connection -> Handle
 tlsHandleImpl c = Handle
     { send = connectionPut c
     , sendLine = connectionPut c . (<> "\n")
-    , recv = connectionGetExact c
+    , recv = connectionGet c
     , recvLine = connectionGetLine maxBound c
     }
 
@@ -488,6 +491,9 @@ auth :: Handle -> IO FTPResponse
 auth h = sendCommand h Auth
 
 -- Data commands
+sendType :: RTypeCode -> ByteString -> Handle -> IO ()
+sendType TA dat h = void $ mapM (sendCommandLine h) $ C.split '\n' dat
+sendType TI dat h = send h dat
 
 nlst :: Handle -> [String] -> IO ByteString
 nlst h args = withDataCommand h Passive [RType TA, Nlst args] getAllLineResp
@@ -499,13 +505,20 @@ list :: Handle -> [String] -> IO ByteString
 list h args = withDataCommand h Passive [RType TA, List args] recvAll
 
 stor :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
-stor h loc dat rtype = do
-    withDataCommand h Passive [RType rtype, Stor loc] $ \dh ->
-        case rtype of
-            TA -> void $ mapM (sendCommandLine dh) $ C.split '\n' dat
-            TI -> send dh dat
+stor h loc dat rtype =
+    withDataCommand h Passive [RType rtype, Stor loc] $ sendType rtype dat
 
 -- TLS data commands
 
 nlstS :: Handle -> [String] -> IO ByteString
 nlstS h args = withTLSDataCommand h Passive [RType TA, Nlst args] getAllLineResp
+
+retrS :: Handle -> String -> IO ByteString
+retrS h path = withTLSDataCommand h Passive [RType TI, Retr path] recvAll
+
+listS :: Handle -> [String] -> IO ByteString
+listS h args = withTLSDataCommand h Passive [RType TA, List args] recvAll
+
+storS :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
+storS h loc dat rtype = do
+    withTLSDataCommand h Passive [RType rtype, Stor loc] $ sendType rtype dat

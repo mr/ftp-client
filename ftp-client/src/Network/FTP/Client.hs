@@ -14,6 +14,7 @@ module Network.FTP.Client (
     rmd,
     pwd,
     quit,
+    nlstS,
     createDataSocket,
     sendCommand,
     sendCommands,
@@ -325,27 +326,23 @@ withDataCommand ch pa cmds f = do
 getAllLineResp :: Handle -> IO ByteString
 getAllLineResp h = getAllLineResp' h []
     where
-        getAllLineResp' h ret = do
+        getAllLineResp' h ret = (do
             line <- getLineResp h
+            getAllLineResp' h (ret <> [line]))
                 `catchIOError` (\_ -> return $ C.intercalate "\n" ret)
-            getAllLineResp' h (ret <> [line])
 
 recvAll :: Handle -> IO ByteString
 recvAll h = recvAll' ""
     where
-        recvAll' bs = do
+        recvAll' bs = (do
             chunk <- recv h defaultChunkSize
+            recvAll' $ bs <> chunk)
                 `catchIOError` (\_ -> return bs)
-            recvAll' $ bs <> chunk
 
 -- TLS connection
 
-createTLSConnection :: String -> Int -> IO (FTPResponse, Connection)
-createTLSConnection host portNum = do
-    h <- createSIOHandle host portNum
-    let insecureH = sIOHandleImpl h
-    resp <- getMultiLineResp insecureH
-    sendCommand insecureH Auth
+connectTLS :: SIO.Handle -> String -> Int -> IO Connection
+connectTLS h host portNum = do
     context <- initConnectionContext
     let tlsSettings = TLSSettingsSimple
             { settingDisableCertificateValidation = True
@@ -358,8 +355,15 @@ createTLSConnection host portNum = do
             , connectionUseSecure = Just tlsSettings
             , connectionUseSocks = Nothing
             }
+    connectFromHandle context h connectionParams
 
-    conn <- connectFromHandle context h connectionParams
+createTLSConnection :: String -> Int -> IO (FTPResponse, Connection)
+createTLSConnection host portNum = do
+    h <- createSIOHandle host portNum
+    let insecureH = sIOHandleImpl h
+    resp <- getMultiLineResp insecureH
+    sendCommand insecureH Auth
+    conn <- connectTLS h host portNum
     return (resp, conn)
 
 tlsHandleImpl :: Connection -> Handle
@@ -378,6 +382,40 @@ withTLSHandle host portNum f = bracket
 
 withFTPS :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
 withFTPS host portNum = withTLSHandle host portNum
+
+-- TLS data connection
+
+createTLSSendDataCommand
+    :: Handle
+    -> PortActivity
+    -> [FTPCommand]
+    -> IO Connection
+createTLSSendDataCommand ch pa cmds = do
+    sendCommands ch [Pbsz 0, Prot P]
+    socket <- createDataSocket pa ch
+    sendCommands ch cmds
+    acceptedSock <- acceptData socket pa
+    (S.SockAddrInet sPort sHost) <- S.getSocketName acceptedSock
+    let (h1, h2, h3, h4) = S.hostAddressToTuple sHost
+        hostName = intercalate "." $ (show . fromEnum) <$> [h1, h2, h3, h4]
+    h <- S.socketToHandle acceptedSock SIO.ReadWriteMode
+    connectTLS h hostName (fromEnum sPort)
+
+withTLSDataCommand
+    :: Show a
+    => Handle
+    -> PortActivity
+    -> [FTPCommand]
+    -> (Handle -> IO a)
+    -> IO a
+withTLSDataCommand ch pa cmds f = do
+    x <- bracket
+        (createTLSSendDataCommand ch pa cmds)
+        connectionClose
+        (f . tlsHandleImpl)
+    resp <- getMultiLineResp ch
+    print $ "Recieved: " <> (show resp)
+    return x
 
 -- Control commands
 
@@ -466,3 +504,8 @@ stor h loc dat rtype = do
         case rtype of
             TA -> void $ mapM (sendCommandLine dh) $ C.split '\n' dat
             TI -> send dh dat
+
+-- TLS data commands
+
+nlstS :: Handle -> [String] -> IO ByteString
+nlstS h args = withTLSDataCommand h Passive [RType TA, Nlst args] getAllLineResp

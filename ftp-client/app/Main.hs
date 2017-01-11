@@ -11,4 +11,4 @@ main = do
     withFTPS host port $ \h welcome -> do
         print welcome
         login h user pass
-        print =<< pwd h
+        print =<< nlstS h []

@@ -1,8 +1,17 @@
+{-|
+Module      : Network.FTP.Client
+Description : Transfer files over FTP and FTPS with Conduit
+License     : Public Domain
+Stability   : experimental
+Portability : POSIX
+-}
 module Network.FTP.Client.Conduit (
+    -- * Data commands
     nlst,
     retr,
     list,
     stor,
+    -- * Secure data commands
     nlstS,
     retrS,
     listS,

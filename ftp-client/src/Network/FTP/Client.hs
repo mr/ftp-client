@@ -4,9 +4,6 @@ Description : Transfer files over FTP and FTPS
 License     : Public Domain
 Stability   : experimental
 Portability : POSIX
-
-Here is a longer description of this module, containing some
-commentary with @some markup@.
 -}
 module Network.FTP.Client (
     -- * Main Entrypoints
@@ -15,9 +12,6 @@ module Network.FTP.Client (
     -- * Control Commands
     login,
     pasv,
-    nlst,
-    retr,
-    stor,
     rename,
     dele,
     cwd,
@@ -26,6 +20,11 @@ module Network.FTP.Client (
     rmd,
     pwd,
     quit,
+    -- * Data Commands
+    nlst,
+    retr,
+    list,
+    stor,
     -- * Secure Data Commands
     nlstS,
     retrS,

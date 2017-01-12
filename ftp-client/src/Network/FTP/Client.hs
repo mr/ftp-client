@@ -65,6 +65,8 @@ import Data.Bits
 import Network.Connection
 import System.IO.Error
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
+import Data.Functor ((<$>))
+import Control.Applicative ((<*>))
 
 -- | Can send and recieve a 'Data.ByteString.ByteString'.
 data Handle = Handle
@@ -225,6 +227,7 @@ sendCommand h fc = do
     return resp
 
 -- | Equvalent to
+--
 -- > mapM . sendCommand
 sendCommands :: Handle -> [FTPCommand] -> IO [FTPResponse]
 sendCommands = mapM . sendCommand
@@ -284,6 +287,7 @@ withSIOHandle host portNum f = bracket
 
 -- | Takes a host name and port. A handle for interacting with the server
 -- will be returned in a callback.
+--
 -- @
 --      withFTP "ftp.server.com" 21 $ \h welcome -> do
 --          print welcome
@@ -415,6 +419,7 @@ withTLSHandle host portNum f = bracket
 -- will be returned in a callback. The commands will be protected with TLS.
 -- Make sure to use TLS data commands like 'nlstS' or 'retrS' if you want
 -- those to use TLS as well
+--
 -- @
 --      withFTPS "ftps.server.com" 21 $ \h welcome -> do
 --          print welcome

@@ -1,7 +1,7 @@
 name:                ftp-client
 version:             0.1.0.0
 synopsis:            Transfer files with FTP and FTPS
-description:         Please see README.md
+description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS.
 homepage:            https://github.com/mr/ftp-client
 license:             PublicDomain
 maintainer:          mrobinson7627@gmail.com
@@ -20,6 +20,7 @@ library
                      , network
                      , attoparsec >= 0.10
                      , connection >= 0.2
+                     , transformers
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
 

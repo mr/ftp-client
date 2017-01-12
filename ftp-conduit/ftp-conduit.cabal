@@ -3,6 +3,7 @@ version:             0.1.0.0
 synopsis:            Transfer file with FTP and FTPS with Conduit
 description:         Please see README.md
 homepage:            https://github.com/mr/ftp-client
+maintainer:          mrobinson7627@gmail.com
 license:             PublicDomain
 license-file:        LICENSE
 author:              Matthew Robinson

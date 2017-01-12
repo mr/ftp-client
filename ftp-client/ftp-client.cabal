@@ -4,6 +4,7 @@ synopsis:            Transfer files with FTP and FTPS
 description:         Please see README.md
 homepage:            https://github.com/mr/ftp-client
 license:             PublicDomain
+maintainer:          mrobinson7627@gmail.com
 license-file:        LICENSE
 author:              Matthew Robinson
 category:            Web

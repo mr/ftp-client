@@ -1,4 +1,4 @@
-# FTP Client
+# FTP Conduit
 
 ftp-client is a client library for the FTP protocol in Haskell.
 
@@ -9,7 +9,9 @@ ftp-client is a client library for the FTP protocol in Haskell.
 withFTP "ftp.server.com" 21 $ \h welcome -> do
     print welcome
     login h "username" "password"
-    print =<< nlst h []
+    runConduitRes
+        $ retr h filename
+        .| sinkFile filename
 ```
 
 ## Secured with TLS
@@ -17,15 +19,7 @@ withFTP "ftp.server.com" 21 $ \h welcome -> do
 withFTPS "ftps.server.com" 21 $ \h welcome -> do
     print welcome
     login h "username" "password"
-    print =<< nlstS h []
-```
-
-## Secured with TLS with Conduit
-```haskell
-withFTPS "ftps.server.com" 21 $ \h welcome -> do
-    print welcome
-    login h "username" "password"
     runConduitRes
-        $ retr h filename
+        $ retrS h filename
         .| sinkFile filename
 ```

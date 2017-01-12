@@ -3,3 +3,4 @@ packages:
 - 'ftp-client'
 - 'ftp-client-conduit'
 extra-deps: []
+pvp-bounds: both

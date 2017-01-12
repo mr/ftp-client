@@ -19,3 +19,13 @@ withFTPS "ftps.server.com" 21 $ \h welcome -> do
     login h "username" "password"
     print =<< nlstS h []
 ```
+
+## Secured with TLS with Conduit
+```haskell
+withFTPS "ftps.server.com" 21 $ \h welcome -> do
+    print welcome
+    login h "username" "password"
+    runConduitRes
+        $ retr h filename
+        .| sinkFile filename
+```

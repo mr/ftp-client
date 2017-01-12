@@ -18,7 +18,6 @@ module Network.FTP.Client.Conduit (
     storS
 ) where
 
-import qualified Data.Conduit.Binary as CB
 import Data.Conduit
 import Control.Monad.IO.Class
 import Data.ByteString.Lazy.Internal (defaultChunkSize)

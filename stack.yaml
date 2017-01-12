@@ -1,5 +1,5 @@
 resolver: lts-7.13
 packages:
 - 'ftp-client'
-- 'ftp-conduit'
+- 'ftp-client-conduit'
 extra-deps: []

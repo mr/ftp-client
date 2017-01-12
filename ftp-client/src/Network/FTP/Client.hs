@@ -1,6 +1,18 @@
+{-|
+Module      : Network.FTP.Client
+Description : Transfer files over FTP and FTPS
+License     : Public Domain
+Stability   : experimental
+Portability : POSIX
+
+Here is a longer description of this module, containing some
+commentary with @some markup@.
+-}
 module Network.FTP.Client (
+    -- * Main Entrypoints
     withFTP,
     withFTPS,
+    -- * Control Commands
     login,
     pasv,
     nlst,
@@ -14,24 +26,30 @@ module Network.FTP.Client (
     rmd,
     pwd,
     quit,
+    -- * Secure Data Commands
     nlstS,
     retrS,
     listS,
     storS,
-    createDataSocket,
+    -- * Types
+    FTPCommand(..),
+    FTPResponse(..),
+    ResponseStatus(..),
+    RTypeCode(..),
+    PortActivity(..),
+    Handle(..),
+    -- * Handle Implementations
+    sIOHandleImpl,
+    tlsHandleImpl,
+    -- * Lower Level Functions
     sendCommand,
     sendCommands,
-    FTPCommand(..),
-    RTypeCode(..),
-    Handle(..),
     getLineResp,
-    PortActivity(..),
-    createSendDataCommand,
-    createTLSSendDataCommand,
     getMultiLineResp,
     sendCommandLine,
-    sIOHandleImpl,
-    tlsHandleImpl
+    createDataSocket,
+    createSendDataCommand,
+    createTLSSendDataCommand
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -49,21 +67,7 @@ import Network.Connection
 import System.IO.Error
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 
-parse227 :: Parser (String, Int)
-parse227 = do
-    skipWhile (/= '(') *> char '('
-    [h1,h2,h3,h4,p1,p2] <- many1 digit `sepBy` char ','
-    let host = intercalate "." [h1,h2,h3,h4]
-        highBits = read p1
-        lowBits = read p2
-        portNum = (highBits `shift` 8) + lowBits
-    return (host, portNum)
-
-parse257 :: Parser String
-parse257 = do
-    char '"'
-    C.unpack <$> takeTill (== '"')
-
+-- | Can send and recieve a 'Data.ByteString.ByteString'.
 data Handle = Handle
     { send :: ByteString -> IO ()
     , sendLine :: ByteString -> IO ()
@@ -71,21 +75,23 @@ data Handle = Handle
     , recvLine :: IO ByteString
     }
 
+-- | Response from an FTP command. ex "200 Welcome!"
 data FTPResponse = FTPResponse {
-    frStatus :: ResponseStatus,
-    frCode :: Int,
-    frMessage :: ByteString
+    frStatus :: ResponseStatus, -- ^ Interpretation of the first digit of an FTP response code
+    frCode :: Int, -- ^ The three digit response code
+    frMessage :: ByteString -- ^ Text of the response
 }
 
 instance Show FTPResponse where
     show fr = (show $ frCode fr) <> " " <> (C.unpack $ frMessage fr)
 
+-- | First digit of an FTP response
 data ResponseStatus
-    = Wait
-    | Success
-    | Continue
-    | FailureRetry
-    | Failure
+    = Wait -- ^ 1
+    | Success -- ^ 2
+    | Continue -- ^ 3
+    | FailureRetry -- ^ 4
+    | Failure -- ^ 5
     deriving (Show)
 
 responseStatus :: ByteString -> ResponseStatus
@@ -107,6 +113,7 @@ data PortActivity = Active | Passive
 
 data ProtType = P | C
 
+-- | Commands according to the FTP specification
 data FTPCommand
     = User String
     | Pass String
@@ -177,9 +184,12 @@ serializeCommand Quit         = "QUIT"
 stripCLRF :: ByteString -> ByteString
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
 
+-- | Get a line from the server
 getLineResp :: Handle -> IO ByteString
 getLineResp h = stripCLRF <$> recvLine h
 
+-- | Get a full response from the server
+-- Used in 'sendCommand'
 getMultiLineResp :: Handle -> IO FTPResponse
 getMultiLineResp h = do
     line <- getLineResp h
@@ -204,6 +214,8 @@ loopMultiLine h code line = do
 sendCommandLine :: Handle -> ByteString -> IO ()
 sendCommandLine h dat = send h $ dat <> "\r\n"
 
+-- | Send a command to the server and get a response back.
+-- Some commands use a data 'Handle', and their data is not returned here.
 sendCommand :: Handle -> FTPCommand -> IO FTPResponse
 sendCommand h fc = do
     let command = serializeCommand fc
@@ -213,6 +225,8 @@ sendCommand h fc = do
     print $ "Recieved: " <> (show resp)
     return resp
 
+-- | Equvalent to
+-- > mapM . sendCommand
 sendCommands :: Handle -> [FTPCommand] -> IO [FTPResponse]
 sendCommands = mapM . sendCommand
 
@@ -269,7 +283,14 @@ withSIOHandle host portNum f = bracket
     SIO.hClose
     (f . sIOHandleImpl)
 
-
+-- | Takes a host name and port. A handle for interacting with the server
+-- will be returned in a callback.
+-- @
+--      withFTP "ftp.server.com" 21 $ \h welcome -> do
+--          print welcome
+--          login h "username" "password"
+--          print =<< nlst h []
+-- @
 withFTP :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
 withFTP host portNum f = withSIOHandle host portNum $ \h -> do
     resp <- getMultiLineResp h
@@ -291,6 +312,7 @@ createDataSocketActive h = do
     port h sHost sPort
     return socket
 
+-- | Open a socket that can be used for data transfers
 createDataSocket :: PortActivity -> Handle -> IO S.Socket
 createDataSocket Active  = createDataSocketActive
 createDataSocket Passive = createDataSocketPasv
@@ -301,6 +323,8 @@ acceptData sock Active = do
     (socket, _) <- S.accept sock
     return socket
 
+-- | Send setup commands to the server and
+-- create a data 'System.IO.Handle'
 createSendDataCommand
     :: Handle
     -> PortActivity
@@ -312,6 +336,7 @@ createSendDataCommand h pa cmds = do
     acceptedSock <- acceptData socket pa
     S.socketToHandle acceptedSock SIO.ReadWriteMode
 
+-- | Provides a data 'Handle' in a callback for a command
 withDataCommand
     :: Show a
     => Handle
@@ -328,6 +353,7 @@ withDataCommand ch pa cmds f = do
     print $ "Recieved: " <> (show resp)
     return x
 
+-- | Recieve data and interpret it linewise
 getAllLineResp :: Handle -> IO ByteString
 getAllLineResp h = getAllLineResp' h []
     where
@@ -336,6 +362,7 @@ getAllLineResp h = getAllLineResp' h []
             getAllLineResp' h (ret <> [line]))
                 `catchIOError` (\_ -> return $ C.intercalate "\n" ret)
 
+-- | Recieve all data and return it as a 'Data.ByteString.ByteString'
 recvAll :: Handle -> IO ByteString
 recvAll h = recvAll' ""
     where
@@ -385,11 +412,23 @@ withTLSHandle host portNum f = bracket
     (\(_, conn) -> connectionClose conn)
     (\(resp, conn) -> f (tlsHandleImpl conn) resp)
 
+-- | Takes a host name and port. A handle for interacting with the server
+-- will be returned in a callback. The commands will be protected with TLS.
+-- Make sure to use TLS data commands like 'nlstS' or 'retrS' if you want
+-- those to use TLS as well
+-- @
+--      withFTPS "ftps.server.com" 21 $ \h welcome -> do
+--          print welcome
+--          login h "username" "password"
+--          print =<< nlstS h []
+-- @
 withFTPS :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
 withFTPS host portNum = withTLSHandle host portNum
 
 -- TLS data connection
 
+-- | Send setup commands to the server and
+-- create a data TLS connection
 createTLSSendDataCommand
     :: Handle
     -> PortActivity
@@ -420,6 +459,21 @@ withTLSDataCommand ch pa cmds f = do
     resp <- getMultiLineResp ch
     print $ "Recieved: " <> (show resp)
     return x
+
+parse227 :: Parser (String, Int)
+parse227 = do
+    skipWhile (/= '(') *> char '('
+    [h1,h2,h3,h4,p1,p2] <- many1 digit `sepBy` char ','
+    let host = intercalate "." [h1,h2,h3,h4]
+        highBits = read p1
+        lowBits = read p2
+        portNum = (highBits `shift` 8) + lowBits
+    return (host, portNum)
+
+parse257 :: Parser String
+parse257 = do
+    char '"'
+    C.unpack <$> takeTill (== '"')
 
 -- Control commands
 
@@ -492,6 +546,7 @@ auth :: Handle -> IO FTPResponse
 auth h = sendCommand h Auth
 
 -- Data commands
+
 sendType :: RTypeCode -> ByteString -> Handle -> IO ()
 sendType TA dat h = void $ mapM (sendCommandLine h) $ C.split '\n' dat
 sendType TI dat h = send h dat

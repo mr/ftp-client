@@ -68,6 +68,15 @@ import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Functor ((<$>))
 import Control.Applicative ((<*>))
 
+debugging :: Bool
+debugging = False
+
+debugPrint :: Show a => a -> IO ()
+debugPrint s = debugPrint' s debugging
+    where
+        debugPrint' _ False = return ()
+        debugPrint' s True = print s
+
 -- | Can send and recieve a 'Data.ByteString.ByteString'.
 data Handle = Handle
     { send :: ByteString -> IO ()
@@ -220,10 +229,10 @@ sendCommandLine h dat = send h $ dat <> "\r\n"
 sendCommand :: Handle -> FTPCommand -> IO FTPResponse
 sendCommand h fc = do
     let command = serializeCommand fc
-    print $ "Sending: " <> command
+    debugPrint $ "Sending: " <> command
     sendCommandLine h $ C.pack command
     resp <- getMultiLineResp h
-    print $ "Recieved: " <> (show resp)
+    debugPrint $ "Recieved: " <> (show resp)
     return resp
 
 -- | Equvalent to
@@ -237,7 +246,7 @@ sendCommands = mapM . sendCommand
 createSocket :: Maybe String -> Int -> S.AddrInfo -> IO (S.Socket, S.AddrInfo)
 createSocket host portNum hints = do
     addr:_ <- S.getAddrInfo (Just hints) host (Just $ show portNum)
-    print $ "Addr: " <> show addr
+    debugPrint $ "Addr: " <> show addr
     sock <- S.socket
         (S.addrFamily addr)
         (S.addrSocketType addr)
@@ -251,7 +260,7 @@ createSocketPassive host portNum = do
     }
     (sock, addr) <- createSocket (Just host) portNum hints
     S.connect sock (S.addrAddress addr)
-    print "Connected"
+    debugPrint "Connected"
     return sock
 
 createSocketActive :: IO S.Socket
@@ -263,7 +272,7 @@ createSocketActive = do
     (sock, addr) <- createSocket Nothing 0 hints
     S.bind sock (S.addrAddress addr)
     S.listen sock 1
-    print "Listening"
+    debugPrint "Listening"
     return sock
 
 createSIOHandle :: String -> Int -> IO SIO.Handle
@@ -304,8 +313,8 @@ withFTP host portNum f = withSIOHandle host portNum $ \h -> do
 createDataSocketPasv :: Handle -> IO S.Socket
 createDataSocketPasv h = do
     (host, portNum) <- pasv h
-    print $ "Host: " <> host
-    print $ "Port: " <> show portNum
+    debugPrint $ "Host: " <> host
+    debugPrint $ "Port: " <> show portNum
     createSocketPassive host portNum
 
 createDataSocketActive :: Handle -> IO S.Socket
@@ -353,7 +362,7 @@ withDataCommand ch pa cmds f = do
         SIO.hClose
         (f . sIOHandleImpl)
     resp <- getMultiLineResp ch
-    print $ "Recieved: " <> (show resp)
+    debugPrint $ "Recieved: " <> (show resp)
     return x
 
 -- | Recieve data and interpret it linewise
@@ -461,7 +470,7 @@ withTLSDataCommand ch pa cmds f = do
         connectionClose
         (f . tlsHandleImpl)
     resp <- getMultiLineResp ch
-    print $ "Recieved: " <> (show resp)
+    debugPrint $ "Recieved: " <> (show resp)
     return x
 
 parse227 :: Parser (String, Int)

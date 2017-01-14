@@ -46,7 +46,6 @@ module Network.FTP.Client (
     getLineResp,
     getMultiLineResp,
     sendCommandLine,
-    createDataSocket,
     createSendDataCommand,
     createTLSSendDataCommand
 ) where
@@ -253,32 +252,39 @@ createSocket host portNum hints = do
         (S.addrProtocol addr)
     return (sock, addr)
 
-createSocketPassive :: String -> Int -> IO S.Socket
-createSocketPassive host portNum = do
+withSocketPassive :: String -> Int -> (S.Socket -> IO a) -> IO a
+withSocketPassive host portNum f = do
     let hints = S.defaultHints {
         S.addrSocketType = S.Stream
     }
-    (sock, addr) <- createSocket (Just host) portNum hints
-    S.connect sock (S.addrAddress addr)
-    debugPrint "Connected"
-    return sock
+    bracketOnError
+        (createSocket (Just host) portNum hints)
+        (\(sock, _) -> S.close sock)
+        (\(sock, addr) -> do
+            S.connect sock (S.addrAddress addr)
+            debugPrint "Connected"
+            f sock
+        )
 
-createSocketActive :: IO S.Socket
-createSocketActive = do
+withSocketActive :: (S.Socket -> IO a) -> IO a
+withSocketActive f = do
     let hints = S.defaultHints {
         S.addrSocketType = S.Stream,
         S.addrFlags = [S.AI_PASSIVE]
     }
-    (sock, addr) <- createSocket Nothing 0 hints
-    S.bind sock (S.addrAddress addr)
-    S.listen sock 1
-    debugPrint "Listening"
-    return sock
+    bracketOnError
+        (createSocket Nothing 0 hints)
+        (\(sock, _) -> S.close sock)
+        (\(sock, addr) -> do
+            S.bind sock (S.addrAddress addr)
+            S.listen sock 1
+            debugPrint "Listening"
+            f sock
+        )
 
 createSIOHandle :: String -> Int -> IO SIO.Handle
-createSIOHandle host portNum = do
-    sock <- createSocketPassive host portNum
-    S.socketToHandle sock SIO.ReadWriteMode
+createSIOHandle host portNum = withSocketPassive host portNum
+    (\sock -> S.socketToHandle sock SIO.ReadWriteMode)
 
 sIOHandleImpl :: SIO.Handle -> Handle
 sIOHandleImpl h = Handle
@@ -310,24 +316,23 @@ withFTP host portNum f = withSIOHandle host portNum $ \h -> do
 
 -- Data connection
 
-createDataSocketPasv :: Handle -> IO S.Socket
-createDataSocketPasv h = do
+withDataSocketPasv :: Handle -> (S.Socket -> IO a) -> IO a
+withDataSocketPasv h f = do
     (host, portNum) <- pasv h
     debugPrint $ "Host: " <> host
     debugPrint $ "Port: " <> show portNum
-    createSocketPassive host portNum
+    withSocketPassive host portNum f
 
-createDataSocketActive :: Handle -> IO S.Socket
-createDataSocketActive h = do
-    socket <- createSocketActive
+withDataSocketActive :: Handle -> (S.Socket -> IO a) -> IO a
+withDataSocketActive h f = withSocketActive $ \socket -> do
     (S.SockAddrInet sPort sHost) <- S.getSocketName socket
     port h sHost sPort
-    return socket
+    f socket
 
 -- | Open a socket that can be used for data transfers
-createDataSocket :: PortActivity -> Handle -> IO S.Socket
-createDataSocket Active  = createDataSocketActive
-createDataSocket Passive = createDataSocketPasv
+withDataSocket :: PortActivity -> Handle -> (S.Socket -> IO a) -> IO a
+withDataSocket Active  = withDataSocketActive
+withDataSocket Passive = withDataSocketPasv
 
 acceptData :: S.Socket -> PortActivity -> IO S.Socket
 acceptData sock Passive = return sock
@@ -341,9 +346,8 @@ createSendDataCommand
     :: Handle
     -> PortActivity
     -> [FTPCommand]
-    -> IO SIO.Handle
-createSendDataCommand h pa cmds = do
-    socket <- createDataSocket pa h
+    -> IO (SIO.Handle)
+createSendDataCommand h pa cmds = withDataSocket pa h $ \socket -> do
     sendCommands h cmds
     acceptedSock <- acceptData socket pa
     S.socketToHandle acceptedSock SIO.ReadWriteMode
@@ -449,14 +453,14 @@ createTLSSendDataCommand
     -> IO Connection
 createTLSSendDataCommand ch pa cmds = do
     sendCommands ch [Pbsz 0, Prot P]
-    socket <- createDataSocket pa ch
-    sendCommands ch cmds
-    acceptedSock <- acceptData socket pa
-    (S.SockAddrInet sPort sHost) <- S.getSocketName acceptedSock
-    let (h1, h2, h3, h4) = S.hostAddressToTuple sHost
-        hostName = intercalate "." $ (show . fromEnum) <$> [h1, h2, h3, h4]
-    h <- S.socketToHandle acceptedSock SIO.ReadWriteMode
-    connectTLS h hostName (fromEnum sPort)
+    withDataSocket pa ch $ \socket -> do
+        sendCommands ch cmds
+        acceptedSock <- acceptData socket pa
+        (S.SockAddrInet sPort sHost) <- S.getSocketName acceptedSock
+        let (h1, h2, h3, h4) = S.hostAddressToTuple sHost
+            hostName = intercalate "." $ (show . fromEnum) <$> [h1, h2, h3, h4]
+        h <- S.socketToHandle acceptedSock SIO.ReadWriteMode
+        connectTLS h hostName (fromEnum sPort)
 
 withTLSDataCommand
     :: Handle

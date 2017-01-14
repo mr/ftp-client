@@ -23,8 +23,7 @@ import Control.Monad.IO.Class
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import System.IO
 import Network.FTP.Client
-    ( createDataSocket
-    , sendCommand
+    ( sendCommand
     , sendCommands
     , FTPCommand(..)
     , RTypeCode(..)

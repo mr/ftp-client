@@ -11,11 +11,6 @@ module Network.FTP.Client.Conduit (
     retr,
     list,
     stor,
-    -- * Secure data commands
-    nlstS,
-    retrS,
-    listS,
-    storS
 ) where
 
 import Data.Conduit
@@ -34,6 +29,7 @@ import Network.FTP.Client
     , getMultiLineResp
     , sIOHandleImpl
     , tlsHandleImpl
+    , Security(..)
     )
 
 import qualified Network.FTP.Client as FTP
@@ -43,6 +39,15 @@ import Control.Monad.Trans.Resource
 import Data.Monoid ((<>))
 import System.IO.Error
 import Network.Connection
+
+debugging :: Bool
+debugging = False
+
+debugPrint :: (Show a, MonadIO m) => a -> m ()
+debugPrint s = debugPrint' s debugging
+    where
+        debugPrint' _ False = return ()
+        debugPrint' s True = liftIO $ print s
 
 getAllLineRespC :: MonadIO m => FTP.Handle -> Producer m ByteString
 getAllLineRespC h = loop
@@ -67,6 +72,18 @@ sendAllLineC h = loop
                     liftIO $ FTP.sendLine h x
                     loop
 
+sourceDataCommandSecurity
+    :: MonadResource m
+    => FTP.Handle
+    -> PortActivity
+    -> [FTPCommand]
+    -> (FTP.Handle -> ConduitM i o m r)
+    -> ConduitM i o m r
+sourceDataCommandSecurity h =
+    case FTP.security h of
+        Clear -> sourceDataCommand h
+        TLS -> sourceTLSDataCommand h
+
 sourceDataCommand
     :: MonadResource m
     => FTP.Handle
@@ -80,7 +97,7 @@ sourceDataCommand ch pa cmds f = do
         hClose
         (f . sIOHandleImpl)
     resp <- liftIO $ getMultiLineResp ch
-    liftIO $ print $ "Recieved: " <> (show resp)
+    debugPrint $ "Recieved: " <> (show resp)
     return x
 
 sourceTLSDataCommand
@@ -96,7 +113,7 @@ sourceTLSDataCommand ch pa cmds f = do
         connectionClose
         (f . tlsHandleImpl)
     resp <- liftIO $ getMultiLineResp ch
-    liftIO $ print $ "Recieved: " <> (show resp)
+    debugPrint $ "Recieved: " <> (show resp)
     return x
 
 sourceHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
@@ -127,29 +144,14 @@ sendType TA h = sendAllLineC h
 sendType TI h = sinkHandle h
 
 nlst :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
-nlst ch args = sourceDataCommand ch Passive [RType TA, Nlst args] getAllLineRespC
+nlst ch args = sourceDataCommandSecurity ch Passive [RType TA, Nlst args] getAllLineRespC
 
 retr :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
-retr ch path = sourceDataCommand ch Passive [RType TI, Retr path] sourceHandle
+retr ch path = sourceDataCommandSecurity ch Passive [RType TI, Retr path] sourceHandle
 
 list :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
-list ch args = sourceDataCommand ch Passive [RType TA, List args] getAllLineRespC
+list ch args = sourceDataCommandSecurity ch Passive [RType TA, List args] getAllLineRespC
 
 stor :: MonadResource m => FTP.Handle -> String -> RTypeCode -> Consumer ByteString m ()
 stor ch loc rtype =
-    sourceDataCommand ch Passive [RType rtype, Stor loc] $ sendType rtype
-
--- TLS
-
-nlstS :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
-nlstS ch args = sourceTLSDataCommand ch Passive [RType TA, Nlst args] getAllLineRespC
-
-retrS :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
-retrS ch path = sourceTLSDataCommand ch Passive [RType TI, Retr path] sourceHandle
-
-listS :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
-listS ch args = sourceTLSDataCommand ch Passive [RType TA, List args] getAllLineRespC
-
-storS :: MonadResource m => FTP.Handle -> String -> RTypeCode -> Consumer ByteString m ()
-storS ch loc rtype =
-    sourceTLSDataCommand ch Passive [RType rtype, Stor loc] $ sendType rtype
+    sourceDataCommandSecurity ch Passive [RType rtype, Stor loc] $ sendType rtype

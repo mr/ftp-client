@@ -25,17 +25,14 @@ module Network.FTP.Client (
     retr,
     list,
     stor,
-    -- * Secure Data Commands
-    nlstS,
-    retrS,
-    listS,
-    storS,
     -- * Types
     FTPCommand(..),
     FTPResponse(..),
     ResponseStatus(..),
     RTypeCode(..),
     PortActivity(..),
+    ProtType(..),
+    Security(..),
     Handle(..),
     -- * Handle Implementations
     sIOHandleImpl,
@@ -76,12 +73,15 @@ debugPrint s = debugPrint' s debugging
         debugPrint' _ False = return ()
         debugPrint' s True = print s
 
+data Security = Clear | TLS
+
 -- | Can send and recieve a 'Data.ByteString.ByteString'.
 data Handle = Handle
     { send :: ByteString -> IO ()
     , sendLine :: ByteString -> IO ()
     , recv :: Int -> IO ByteString
     , recvLine :: IO ByteString
+    , security :: Security
     }
 
 -- | Response from an FTP command. ex "200 Welcome!"
@@ -292,6 +292,7 @@ sIOHandleImpl h = Handle
     , sendLine = C.hPutStrLn h
     , recv = C.hGetSome h
     , recvLine = C.hGetLine h
+    , security = Clear
     }
 
 withSIOHandle :: String -> Int -> (Handle -> IO a) -> IO a
@@ -304,10 +305,10 @@ withSIOHandle host portNum f = bracket
 -- will be returned in a callback.
 --
 -- @
---      withFTP "ftp.server.com" 21 $ \h welcome -> do
---          print welcome
---          login h "username" "password"
---          print =<< nlst h []
+-- withFTP "ftp.server.com" 21 $ \h welcome -> do
+--     print welcome
+--     login h "username" "password"
+--     print =<< nlst h []
 -- @
 withFTP :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
 withFTP host portNum f = withSIOHandle host portNum $ \h -> do
@@ -354,8 +355,7 @@ createSendDataCommand h pa cmds = withDataSocket pa h $ \socket -> do
 
 -- | Provides a data 'Handle' in a callback for a command
 withDataCommand
-    :: Show a
-    => Handle
+    :: Handle
     -> PortActivity
     -> [FTPCommand]
     -> (Handle -> IO a)
@@ -420,6 +420,7 @@ tlsHandleImpl c = Handle
     , sendLine = connectionPut c . (<> "\n")
     , recv = connectionGet c
     , recvLine = connectionGetLine maxBound c
+    , security = TLS
     }
 
 withTLSHandle :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
@@ -430,14 +431,12 @@ withTLSHandle host portNum f = bracket
 
 -- | Takes a host name and port. A handle for interacting with the server
 -- will be returned in a callback. The commands will be protected with TLS.
--- Make sure to use TLS data commands like 'nlstS' or 'retrS' if you want
--- those to use TLS as well
 --
 -- @
---      withFTPS "ftps.server.com" 21 $ \h welcome -> do
---          print welcome
---          login h "username" "password"
---          print =<< nlstS h []
+-- withFTPS "ftps.server.com" 21 $ \h welcome -> do
+--     print welcome
+--     login h "username" "password"
+--     print =<< nlst h []
 -- @
 withFTPS :: String -> Int -> (Handle -> FTPResponse -> IO a) -> IO a
 withFTPS host portNum = withTLSHandle host portNum
@@ -511,16 +510,16 @@ acct h pass = sendCommand h (Acct pass)
 
 rename :: Handle -> String -> String -> IO FTPResponse
 rename h from to = do
-        res <- sendCommand h (Rnfr from)
-        case frStatus res of
-            Continue -> sendCommand h (Rnto to)
-            _ -> return res
+    res <- sendCommand h (Rnfr from)
+    case frStatus res of
+        Continue -> sendCommand h (Rnto to)
+        _ -> return res
 
 dele :: Handle -> String -> IO FTPResponse
 dele h file = sendCommand h (Dele file)
 
 cwd :: Handle -> String -> IO FTPResponse
-cwd h dir = do
+cwd h dir =
     sendCommand h $ if dir == ".."
         then Cdup
         else Cwd dir
@@ -568,30 +567,26 @@ sendType :: RTypeCode -> ByteString -> Handle -> IO ()
 sendType TA dat h = void $ mapM (sendCommandLine h) $ C.split '\n' dat
 sendType TI dat h = send h dat
 
+withDataCommandSecurity
+    :: Handle
+    -> PortActivity
+    -> [FTPCommand]
+    -> (Handle -> IO a)
+    -> IO a
+withDataCommandSecurity h =
+    case security h of
+        Clear -> withDataCommand h
+        TLS -> withTLSDataCommand h
+
 nlst :: Handle -> [String] -> IO ByteString
-nlst h args = withDataCommand h Passive [RType TA, Nlst args] getAllLineResp
+nlst h args = withDataCommandSecurity h Passive [RType TA, Nlst args] getAllLineResp
 
 retr :: Handle -> String -> IO ByteString
-retr h path = withDataCommand h Passive [RType TI, Retr path] recvAll
+retr h path = withDataCommandSecurity h Passive [RType TI, Retr path] recvAll
 
 list :: Handle -> [String] -> IO ByteString
-list h args = withDataCommand h Passive [RType TA, List args] recvAll
+list h args = withDataCommandSecurity h Passive [RType TA, List args] recvAll
 
 stor :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
 stor h loc dat rtype =
-    withDataCommand h Passive [RType rtype, Stor loc] $ sendType rtype dat
-
--- TLS data commands
-
-nlstS :: Handle -> [String] -> IO ByteString
-nlstS h args = withTLSDataCommand h Passive [RType TA, Nlst args] getAllLineResp
-
-retrS :: Handle -> String -> IO ByteString
-retrS h path = withTLSDataCommand h Passive [RType TI, Retr path] recvAll
-
-listS :: Handle -> [String] -> IO ByteString
-listS h args = withTLSDataCommand h Passive [RType TA, List args] recvAll
-
-storS :: Handle -> String -> B.ByteString -> RTypeCode -> IO ()
-storS h loc dat rtype = do
-    withTLSDataCommand h Passive [RType rtype, Stor loc] $ sendType rtype dat
+    withDataCommandSecurity h Passive [RType rtype, Stor loc] $ sendType rtype dat

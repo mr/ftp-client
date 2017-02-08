@@ -54,8 +54,7 @@ getAllLineRespC :: MonadIO m => FTP.Handle m -> Producer m ByteString
 getAllLineRespC h = loop
     where
         loop = do
-            line <- FTP.getLineResp h
-                `M.catchIOError` (\_ -> return "")
+            line <- FTP.getLineResp h `M.catchIOError` const (return "")
             if B.null line
                 then return ()
                 else do
@@ -95,7 +94,7 @@ sourceDataCommand
 sourceDataCommand ch pa cmds f = do
     x <- bracketP
         (createSendDataCommand ch pa cmds)
-        hClose
+        (liftIO . hClose)
         (f . sIOHandleImpl)
     resp <- liftIO $ getMultiLineResp ch
     debugPrint $ "Recieved: " <> (show resp)
@@ -111,7 +110,7 @@ sourceTLSDataCommand
 sourceTLSDataCommand ch pa cmds f = do
     x <- bracketP
         (createTLSSendDataCommand ch pa cmds)
-        connectionClose
+        (liftIO . connectionClose)
         (f . tlsHandleImpl)
     resp <- liftIO $ getMultiLineResp ch
     debugPrint $ "Recieved: " <> (show resp)
@@ -121,8 +120,8 @@ sourceHandle :: MonadIO m => FTP.Handle m -> Producer m ByteString
 sourceHandle h = loop
     where
         loop = do
-            bs <- liftIO $ FTP.recv h defaultChunkSize
-                `catchIOError` (\_ -> return "")
+            bs <- FTP.recv h defaultChunkSize
+                `M.catchIOError` const (return "")
             if B.null bs
                 then return ()
                 else do
@@ -137,7 +136,7 @@ sinkHandle h = loop
             case mbs of
                 Nothing -> return ()
                 Just bs -> do
-                    liftIO $ FTP.send h bs
+                    FTP.send h bs
                     loop
 
 sendType

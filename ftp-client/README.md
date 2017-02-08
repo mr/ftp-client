@@ -17,5 +17,5 @@ withFTP "ftp.server.com" 21 $ \h welcome -> do
 withFTPS "ftps.server.com" 21 $ \h welcome -> do
     print welcome
     login h "username" "password"
-    print =<< nlstS h []
+    print =<< nlst h []
 ```

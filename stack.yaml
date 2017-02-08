@@ -1,4 +1,4 @@
-resolver: lts-7.13
+resolver: lts-7.19
 packages:
 - 'ftp-client'
 - 'ftp-client-conduit'

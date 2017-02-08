@@ -21,6 +21,7 @@ library
                      , bytestring
                      , resourcet == 1.1.*
                      , connection
+                     , exceptions
   default-language:    Haskell2010
   default-extensions:  RankNTypes, OverloadedStrings
 

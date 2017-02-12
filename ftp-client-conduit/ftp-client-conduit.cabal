@@ -1,5 +1,5 @@
 name:                ftp-client-conduit
-version:             0.3.0.0
+version:             0.4.0.0
 synopsis:            Transfer file with FTP and FTPS with Conduit
 description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS. ftp-client-conduit uses conduit to stream files and data in constant space.
 homepage:            https://github.com/mr/ftp-client
@@ -16,7 +16,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Network.FTP.Client.Conduit
   build-depends:       base >= 4.7 && < 5
-                     , ftp-client == 0.3.*
+                     , ftp-client == 0.4.*
                      , conduit >= 1.1
                      , bytestring
                      , resourcet == 1.1.*

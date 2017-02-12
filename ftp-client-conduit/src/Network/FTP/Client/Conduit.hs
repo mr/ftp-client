@@ -50,18 +50,19 @@ debugPrint s = debugPrint' s debugging
         debugPrint' _ False = return ()
         debugPrint' s True = liftIO $ print s
 
-getAllLineRespC :: MonadIO m => FTP.Handle m -> Producer m ByteString
+getAllLineRespC :: MonadIO m => FTP.Handle -> Producer m ByteString
 getAllLineRespC h = loop
     where
         loop = do
-            line <- FTP.getLineResp h `M.catchIOError` const (return "")
+            line <- liftIO
+                $ FTP.getLineResp h `M.catchIOError` const (return "")
             if B.null line
                 then return ()
                 else do
                     yield line
                     loop
 
-sendAllLineC :: MonadIO m => FTP.Handle m -> Consumer ByteString m ()
+sendAllLineC :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
 sendAllLineC h = loop
     where
         loop = do
@@ -69,15 +70,15 @@ sendAllLineC h = loop
             case mx of
                 Nothing -> return ()
                 Just x -> do
-                    FTP.sendLine h x
+                    liftIO $ FTP.sendLine h x
                     loop
 
 sourceDataCommandSecurity
     :: MonadResource m
-    => FTP.Handle m
+    => FTP.Handle
     -> PortActivity
     -> [FTPCommand]
-    -> (FTP.Handle m -> ConduitM i o m r)
+    -> (FTP.Handle -> ConduitM i o m r)
     -> ConduitM i o m r
 sourceDataCommandSecurity h =
     case FTP.security h of
@@ -86,10 +87,10 @@ sourceDataCommandSecurity h =
 
 sourceDataCommand
     :: MonadResource m
-    => FTP.Handle m
+    => FTP.Handle
     -> PortActivity
     -> [FTPCommand]
-    -> (FTP.Handle m -> ConduitM i o m r)
+    -> (FTP.Handle -> ConduitM i o m r)
     -> ConduitM i o m r
 sourceDataCommand ch pa cmds f = do
     x <- bracketP
@@ -102,10 +103,10 @@ sourceDataCommand ch pa cmds f = do
 
 sourceTLSDataCommand
     :: MonadResource m
-    => FTP.Handle m
+    => FTP.Handle
     -> PortActivity
     -> [FTPCommand]
-    -> (FTP.Handle m -> ConduitM i o m r)
+    -> (FTP.Handle -> ConduitM i o m r)
     -> ConduitM i o m r
 sourceTLSDataCommand ch pa cmds f = do
     x <- bracketP
@@ -116,11 +117,11 @@ sourceTLSDataCommand ch pa cmds f = do
     debugPrint $ "Recieved: " <> (show resp)
     return x
 
-sourceHandle :: MonadIO m => FTP.Handle m -> Producer m ByteString
+sourceHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
 sourceHandle h = loop
     where
         loop = do
-            bs <- FTP.recv h defaultChunkSize
+            bs <- liftIO $ FTP.recv h defaultChunkSize
                 `M.catchIOError` const (return "")
             if B.null bs
                 then return ()
@@ -128,7 +129,7 @@ sourceHandle h = loop
                     yield bs
                     loop
 
-sinkHandle :: MonadIO m => FTP.Handle m -> Consumer ByteString m ()
+sinkHandle :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
 sinkHandle h = loop
     where
         loop = do
@@ -136,30 +137,30 @@ sinkHandle h = loop
             case mbs of
                 Nothing -> return ()
                 Just bs -> do
-                    FTP.send h bs
+                    liftIO $ FTP.send h bs
                     loop
 
 sendType
     :: MonadResource m
     => RTypeCode
-    -> FTP.Handle m
+    -> FTP.Handle
     -> Consumer ByteString m ()
 sendType TA h = sendAllLineC h
 sendType TI h = sinkHandle h
 
-nlst :: MonadResource m => FTP.Handle m -> [String] -> Producer m ByteString
+nlst :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
 nlst ch args =
     sourceDataCommandSecurity ch Passive [RType TA, Nlst args] getAllLineRespC
 
-retr :: MonadResource m => FTP.Handle m -> String -> Producer m ByteString
+retr :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
 retr ch path =
     sourceDataCommandSecurity ch Passive [RType TI, Retr path] sourceHandle
 
-list :: MonadResource m => FTP.Handle m -> [String] -> Producer m ByteString
+list :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
 list ch args =
     sourceDataCommandSecurity ch Passive [RType TA, List args] getAllLineRespC
 
-stor :: MonadResource m => FTP.Handle m -> String -> RTypeCode -> Consumer ByteString m ()
+stor :: MonadResource m => FTP.Handle -> String -> RTypeCode -> Consumer ByteString m ()
 stor ch loc rtype =
     sourceDataCommandSecurity ch Passive [RType rtype, Stor loc]
         $ sendType rtype

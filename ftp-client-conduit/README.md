@@ -20,6 +20,6 @@ withFTPS "ftps.server.com" 21 $ \h welcome -> do
     print welcome
     login h "username" "password"
     runConduitRes
-        $ retrS h filename
+        $ retr h filename
         .| sinkFile filename
 ```

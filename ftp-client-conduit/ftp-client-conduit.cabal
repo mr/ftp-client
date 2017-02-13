@@ -17,7 +17,7 @@ library
   exposed-modules:     Network.FTP.Client.Conduit
   build-depends:       base >= 4.7 && < 5
                      , ftp-client == 0.4.*
-                     , conduit >= 1.1
+                     , conduit-combinators >= 1.1
                      , bytestring
                      , resourcet == 1.1.*
                      , connection

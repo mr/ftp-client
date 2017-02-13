@@ -22,6 +22,7 @@ library
                      , connection >= 0.2
                      , transformers
                      , exceptions
+                     , containers
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
 

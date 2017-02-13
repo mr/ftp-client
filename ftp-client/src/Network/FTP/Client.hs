@@ -25,6 +25,7 @@ module Network.FTP.Client (
     retr,
     list,
     stor,
+    mlsd,
     -- * Types
     FTPCommand(..),
     FTPResponse(..),
@@ -66,6 +67,11 @@ import System.IO.Error
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Functor ((<$>))
 import Control.Applicative ((<*>))
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import Control.Arrow
+
+import Debug.Trace
 
 debugging :: Bool
 debugging = False
@@ -144,6 +150,7 @@ data FTPCommand
     | Rmd String
     | Pbsz Int
     | Prot ProtType
+    | Mlsd String
     | Cwd String
     | Cdup
     | Ccc
@@ -184,6 +191,7 @@ serializeCommand (Rmd dir)    = "RMD " <> dir
 serializeCommand (Pbsz buf)   = "PBSZ " <> show buf
 serializeCommand (Prot P)     = "PROT P"
 serializeCommand (Prot C)     = "PROT C"
+serializeCommand (Mlsd path)  = "MLSD " <> path
 serializeCommand (Cwd dir)    = "CWD " <> dir
 serializeCommand Cdup         = "CDUP"
 serializeCommand Ccc          = "CCC"
@@ -409,7 +417,7 @@ withDataCommand ch pa cmds f = do
 getAllLineResp :: (MonadIO m, MonadCatch m) => Handle -> m ByteString
 getAllLineResp h = getAllLineResp' h []
     where
-        getAllLineResp' h ret = (do
+        getAllLineResp' h ret = ( do
             line <- liftIO $ getLineResp h
             getAllLineResp' h (ret <> [line]))
                 `M.catchIOError` (\_ -> return $ C.intercalate "\n" ret)
@@ -418,7 +426,7 @@ getAllLineResp h = getAllLineResp' h []
 recvAll :: (MonadIO m, MonadCatch m) => Handle -> m ByteString
 recvAll h = recvAll' ""
     where
-        recvAll' bs = (do
+        recvAll' bs = ( do
             chunk <- liftIO $ recv h defaultChunkSize
             recvAll' $ bs <> chunk)
                 `M.catchIOError` (\_ -> return bs)
@@ -638,7 +646,7 @@ retr :: (MonadIO m, MonadMask m) => Handle -> String -> m ByteString
 retr h path = withDataCommandSecurity h Passive [RType TI, Retr path] recvAll
 
 list :: (MonadIO m, MonadMask m) => Handle -> [String] -> m ByteString
-list h args = withDataCommandSecurity h Passive [RType TA, List args] recvAll
+list h args = withDataCommandSecurity h Passive [RType TA, List args] getAllLineResp
 
 stor
     :: (MonadIO m, MonadMask m)
@@ -650,3 +658,33 @@ stor
 stor h loc dat rtype =
     withDataCommandSecurity h Passive [RType rtype, Stor loc]
         $ sendType rtype dat
+
+data MlsdResponse = MlsdResponse {
+    mrFilename :: String,
+    mrFacts :: Map String String
+} deriving (Show)
+
+splitApart :: Char -> ByteString -> (ByteString, ByteString)
+splitApart on s =
+    let (x0, x1) = C.break (== on) s
+    in (x0, C.drop 1 x1)
+
+getMlsdResponse :: (MonadIO m, MonadCatch m) => Handle -> m [MlsdResponse]
+getMlsdResponse h = getMlsdResponse' h []
+    where
+        getMlsdResponse' h ret = ( do
+            line <- liftIO $ getLineResp h
+            let (factLine, filename) = splitApart ' ' line
+                bFacts = splitApart '=' <$> C.split ';' factLine
+                facts
+                    = Map.fromList
+                    $ filter (not . null . fst)
+                    $ join (***) C.unpack <$> bFacts
+            getMlsdResponse' h $
+                if C.null line
+                    then ret
+                    else (MlsdResponse (C.unpack filename) facts):ret
+            ) `M.catchIOError` (\_ -> return ret)
+
+mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsdResponse]
+mlsd h path = withDataCommandSecurity h Passive [RType TA, Mlsd path] getMlsdResponse

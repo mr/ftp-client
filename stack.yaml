@@ -2,5 +2,6 @@ resolver: lts-8.0
 packages:
 - 'ftp-client'
 - 'ftp-client-conduit'
+- 'example'
 extra-deps: []
 pvp-bounds: both

@@ -11,9 +11,10 @@ module Network.FTP.Client.Conduit (
     retr,
     list,
     stor,
+    mlsd
 ) where
 
-import Data.Conduit
+import Conduit
 import Control.Monad.IO.Class
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import System.IO
@@ -30,6 +31,7 @@ import Network.FTP.Client
     , sIOHandleImpl
     , tlsHandleImpl
     , Security(..)
+    , parseMlsdLine
     )
 
 import qualified Network.FTP.Client as FTP
@@ -117,8 +119,8 @@ sourceTLSDataCommand ch pa cmds f = do
     debugPrint $ "Recieved: " <> (show resp)
     return x
 
-sourceHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
-sourceHandle h = loop
+sourceFTPHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
+sourceFTPHandle h = loop
     where
         loop = do
             bs <- liftIO $ FTP.recv h defaultChunkSize
@@ -129,8 +131,8 @@ sourceHandle h = loop
                     yield bs
                     loop
 
-sinkHandle :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
-sinkHandle h = loop
+sinkFTPHandle :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
+sinkFTPHandle h = loop
     where
         loop = do
             mbs <- await
@@ -146,7 +148,7 @@ sendType
     -> FTP.Handle
     -> Consumer ByteString m ()
 sendType TA h = sendAllLineC h
-sendType TI h = sinkHandle h
+sendType TI h = sinkFTPHandle h
 
 nlst :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
 nlst ch args =
@@ -154,7 +156,7 @@ nlst ch args =
 
 retr :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
 retr ch path =
-    sourceDataCommandSecurity ch Passive [RType TI, Retr path] sourceHandle
+    sourceDataCommandSecurity ch Passive [RType TI, Retr path] sourceFTPHandle
 
 list :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
 list ch args =
@@ -164,3 +166,12 @@ stor :: MonadResource m => FTP.Handle -> String -> RTypeCode -> Consumer ByteStr
 stor ch loc rtype =
     sourceDataCommandSecurity ch Passive [RType rtype, Stor loc]
         $ sendType rtype
+
+mlsd
+    :: MonadResource m
+    => FTP.Handle
+    -> String
+    -> Producer m FTP.MlsdResponse
+mlsd ch dir =
+    sourceDataCommandSecurity ch Passive [RType TA, Mlsd dir] getAllLineRespC
+        .| mapC parseMlsdLine

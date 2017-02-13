@@ -30,6 +30,7 @@ module Network.FTP.Client (
     FTPCommand(..),
     FTPResponse(..),
     ResponseStatus(..),
+    MlsdResponse(..),
     RTypeCode(..),
     PortActivity(..),
     ProtType(..),
@@ -45,7 +46,8 @@ module Network.FTP.Client (
     getMultiLineResp,
     sendCommandLine,
     createSendDataCommand,
-    createTLSSendDataCommand
+    createTLSSendDataCommand,
+    parseMlsdLine
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -669,21 +671,25 @@ splitApart on s =
     let (x0, x1) = C.break (== on) s
     in (x0, C.drop 1 x1)
 
+parseMlsdLine :: ByteString -> MlsdResponse
+parseMlsdLine line =
+    let (factLine, filename) = splitApart ' ' line
+        bFacts = splitApart '=' <$> C.split ';' factLine
+        facts
+            = Map.fromList
+            $ filter (not . null . fst)
+            $ join (***) C.unpack <$> bFacts
+    in MlsdResponse (C.unpack filename) facts
+
 getMlsdResponse :: (MonadIO m, MonadCatch m) => Handle -> m [MlsdResponse]
 getMlsdResponse h = getMlsdResponse' h []
     where
         getMlsdResponse' h ret = ( do
             line <- liftIO $ getLineResp h
-            let (factLine, filename) = splitApart ' ' line
-                bFacts = splitApart '=' <$> C.split ';' factLine
-                facts
-                    = Map.fromList
-                    $ filter (not . null . fst)
-                    $ join (***) C.unpack <$> bFacts
             getMlsdResponse' h $
                 if C.null line
                     then ret
-                    else (MlsdResponse (C.unpack filename) facts):ret
+                    else (parseMlsdLine line):ret
             ) `M.catchIOError` (\_ -> return ret)
 
 mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsdResponse]

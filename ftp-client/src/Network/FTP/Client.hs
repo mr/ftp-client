@@ -41,9 +41,12 @@ module Network.FTP.Client (
     tlsHandleImpl,
     -- * Lower Level Functions
     sendCommand,
-    sendCommands,
+    sendCommandS,
+    sendAll,
+    sendAllS,
     getLineResp,
-    getMultiLineResp,
+    getResponse,
+    getResponseS,
     sendCommandLine,
     createSendDataCommand,
     createTLSSendDataCommand,
@@ -72,17 +75,21 @@ import Control.Applicative ((<*>))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Control.Arrow
+import Data.Typeable
 
 import Debug.Trace
 
 debugging :: Bool
-debugging = False
+debugging = True
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
 debugPrint s = debugPrint' s debugging
     where
         debugPrint' _ False = return ()
         debugPrint' s True = liftIO $ print s
+
+debugResponse :: (Show a, MonadIO m) => a -> m ()
+debugResponse s = debugPrint $ "Recieved: " <> (show s)
 
 data Security = Clear | TLS
 
@@ -112,7 +119,16 @@ data ResponseStatus
     | Continue -- ^ 3
     | FailureRetry -- ^ 4
     | Failure -- ^ 5
-    deriving (Show)
+    deriving (Show, Eq)
+
+data FTPException
+    = FailureRetryException FTPResponse
+    | FailureException FTPResponse
+    | UnsuccessfulException FTPResponse
+    | BadProtocolResponseException ByteString
+    deriving (Show, Typeable)
+
+instance Exception FTPException
 
 responseStatus :: ByteString -> ResponseStatus
 responseStatus cbs =
@@ -121,7 +137,8 @@ responseStatus cbs =
         Just ('2', _) -> Success
         Just ('3', _) -> Continue
         Just ('4', _) -> FailureRetry
-        _             -> Failure
+        Just ('5', _) -> Failure
+        _ -> throw $ BadProtocolResponseException cbs
 
 data RTypeCode = TA | TI
 
@@ -170,7 +187,7 @@ formatPort ha pn =
     let (w1, w2, w3, w4) = S.hostAddressToTuple ha
         hn = show <$> [w1, w2, w3, w4]
         portParts = show <$> [pn `quot` 256, pn `mod` 256]
-    in  intercalate "," (hn <> portParts)
+    in intercalate "," (hn <> portParts)
 
 serializeCommand :: FTPCommand -> String
 serializeCommand (User user)  = "USER " <> user
@@ -212,17 +229,21 @@ getLineResp h = stripCLRF <$> recvLine h
 
 -- | Get a full response from the server
 -- Used in 'sendCommand'
-getMultiLineResp :: MonadIO m => Handle -> m FTPResponse
-getMultiLineResp h = do
+getResponse :: MonadIO m => Handle -> m FTPResponse
+getResponse h = do
     line <- liftIO $ getLineResp h
     let (code, rest) = C.splitAt 3 line
     message <- if C.head rest == '-'
         then loopMultiLine h code line
         else return line
-    return $ FTPResponse
-        (responseStatus code)
-        (read $ C.unpack code)
-        (C.drop 4 message)
+    let response = FTPResponse
+            (responseStatus code)
+            (read $ C.unpack code)
+            (C.drop 4 message)
+    case frStatus response of
+        FailureRetry -> liftIO $ throwIO $ FailureRetryException response
+        Failure -> liftIO $ throwIO $ FailureException response
+        _ -> return response
 
 loopMultiLine
     :: MonadIO m
@@ -238,6 +259,15 @@ loopMultiLine h code line = do
         then return multiLine
         else loopMultiLine h nextCode multiLine
 
+ensureSuccess :: MonadIO m => FTPResponse -> m FTPResponse
+ensureSuccess resp =
+    case frStatus resp of
+        Success -> return resp
+        _ -> liftIO $ throwIO $ UnsuccessfulException resp
+
+getResponseS :: MonadIO m => Handle -> m FTPResponse
+getResponseS = ensureSuccess <=< getResponse
+
 sendCommandLine :: MonadIO m => Handle -> ByteString -> m ()
 sendCommandLine h = liftIO . send h . (<> "\r\n")
 
@@ -248,19 +278,33 @@ sendCommand h fc = do
     let command = serializeCommand fc
     debugPrint $ "Sending: " <> command
     sendCommandLine h $ C.pack command
-    resp <- getMultiLineResp h
-    debugPrint $ "Recieved: " <> (show resp)
+    resp <- getResponse h
+    debugResponse resp
     return resp
+
+sendCommandS :: MonadIO m => Handle -> FTPCommand -> m FTPResponse
+sendCommandS h fc = sendCommand h fc >>= ensureSuccess
 
 -- | Equvalent to
 --
 -- > mapM . sendCommand
-sendCommands :: MonadIO m => Handle -> [FTPCommand] -> m [FTPResponse]
-sendCommands = mapM . sendCommand
+sendAll :: MonadIO m => Handle -> [FTPCommand] -> m [FTPResponse]
+sendAll = mapM . sendCommand
+
+-- | Equvalent to
+--
+-- > mapM . sendCommandS
+sendAllS :: MonadIO m => Handle -> [FTPCommand] -> m [FTPResponse]
+sendAllS = mapM . sendCommandS
 
 -- Control connection
 
-createSocket :: MonadIO m => Maybe String -> Int -> S.AddrInfo -> m (S.Socket, S.AddrInfo)
+createSocket
+    :: MonadIO m
+    => Maybe String
+    -> Int
+    -> S.AddrInfo
+    -> m (S.Socket, S.AddrInfo)
 createSocket host portNum hints = do
     addr:_ <- liftIO $ S.getAddrInfo (Just hints) host (Just $ show portNum)
     debugPrint $ "Addr: " <> show addr
@@ -284,6 +328,7 @@ withSocketPassive host portNum f = do
         (createSocket (Just host) portNum hints)
         (liftIO . S.close . fst)
         (\(sock, addr) -> do
+            debugPrint $ "Connecting"
             liftIO $ S.connect sock (S.addrAddress addr)
             debugPrint "Connected"
             f sock
@@ -299,6 +344,7 @@ withSocketActive f = do
         (createSocket Nothing 0 hints)
         (liftIO . S.close . fst)
         (\(sock, addr) -> do
+            debugPrint "Binding"
             liftIO $ S.bind sock (S.addrAddress addr)
             liftIO $ S.listen sock 1
             debugPrint "Listening"
@@ -345,7 +391,7 @@ withFTP
     -> (Handle -> FTPResponse -> m a)
     -> m a
 withFTP host portNum f = withSIOHandle host portNum $ \h -> do
-    resp <- getMultiLineResp h
+    resp <- getResponse h
     f h resp
 
 -- Data connection
@@ -385,16 +431,30 @@ acceptData :: MonadIO m => PortActivity -> S.Socket -> m S.Socket
 acceptData Passive = return
 acceptData Active = return . fst <=< liftIO . S.accept
 
+-- Response to data commands should be 150 but apparently
+-- some servers will respond with 200 before 150 so just ignore it
+ensureSucessfulData :: MonadIO m => Handle -> FTPResponse -> m ()
+ensureSucessfulData h resp = do
+    resp' <- case frStatus resp of
+        Success -> do
+            newResp <- getResponse h
+            debugResponse newResp
+            return newResp
+        _ -> return resp
+    liftIO $ when (frStatus resp' /= Wait)
+        $ throwIO $ UnsuccessfulException resp
+
 -- | Send setup commands to the server and
 -- create a data 'System.IO.Handle'
 createSendDataCommand
     :: (MonadIO m, MonadMask m)
     => Handle
     -> PortActivity
-    -> [FTPCommand]
+    -> FTPCommand
     -> m (SIO.Handle)
-createSendDataCommand h pa cmds = withDataSocket pa h $ \socket -> do
-    sendCommands h cmds
+createSendDataCommand h pa cmd = withDataSocket pa h $ \socket -> do
+    resp <- sendCommand h cmd
+    ensureSucessfulData h resp
     acceptedSock <- acceptData pa socket
     liftIO $ S.socketToHandle acceptedSock SIO.ReadWriteMode
 
@@ -403,16 +463,18 @@ withDataCommand
     :: (MonadIO m, MonadMask m)
     => Handle
     -> PortActivity
-    -> [FTPCommand]
+    -> RTypeCode
+    -> FTPCommand
     -> (Handle -> m a)
     -> m a
-withDataCommand ch pa cmds f = do
+withDataCommand ch pa code cmd f = do
+    sendCommandS ch $ RType code
     x <- M.bracket
-        (createSendDataCommand ch pa cmds)
+        (createSendDataCommand ch pa cmd)
         (liftIO . SIO.hClose)
         (f . sIOHandleImpl)
-    resp <- getMultiLineResp ch
-    debugPrint $ "Recieved: " <> (show resp)
+    resp <- getResponse ch
+    debugResponse resp
     return x
 
 -- | Recieve data and interpret it linewise
@@ -459,7 +521,7 @@ createTLSConnection
 createTLSConnection host portNum = do
     h <- createSIOHandle host portNum
     let insecureH = sIOHandleImpl h
-    resp <- getMultiLineResp insecureH
+    resp <- getResponse insecureH
     sendCommand insecureH Auth
     conn <- connectTLS h host portNum
     return (resp, conn)
@@ -509,12 +571,13 @@ createTLSSendDataCommand
     :: (MonadIO m, MonadMask m)
     => Handle
     -> PortActivity
-    -> [FTPCommand]
+    -> FTPCommand
     -> m Connection
-createTLSSendDataCommand ch pa cmds = do
-    sendCommands ch [Pbsz 0, Prot P]
+createTLSSendDataCommand ch pa cmd = do
+    sendAllS ch [Pbsz 0, Prot P]
     withDataSocket pa ch $ \socket -> do
-        sendCommands ch cmds
+        resp <- sendCommand ch cmd
+        ensureSucessfulData ch resp
         acceptedSock <- acceptData pa socket
         (S.SockAddrInet sPort sHost) <- liftIO $ S.getSocketName acceptedSock
         let (h1, h2, h3, h4) = S.hostAddressToTuple sHost
@@ -526,17 +589,31 @@ withTLSDataCommand
     :: (MonadIO m, MonadMask m)
     => Handle
     -> PortActivity
-    -> [FTPCommand]
+    -> RTypeCode
+    -> FTPCommand
     -> (Handle -> m a)
     -> m a
-withTLSDataCommand ch pa cmds f = do
+withTLSDataCommand ch pa code cmd f = do
+    sendCommandS ch $ RType code
     x <- M.bracket
-        (createTLSSendDataCommand ch pa cmds)
+        (createTLSSendDataCommand ch pa cmd)
         (liftIO . connectionClose)
         (f . tlsHandleImpl)
-    resp <- getMultiLineResp ch
+    resp <- getResponse ch
     debugPrint $ "Recieved: " <> (show resp)
     return x
+
+parseResponse :: MonadIO m => FTPResponse -> Parser a -> m a
+parseResponse resp p =
+    case parseOnly p (frMessage resp) of
+        Right x -> return x
+        Left _ -> liftIO $ throwIO
+            $ BadProtocolResponseException (frMessage resp)
+
+ensureCode :: MonadIO m => FTPResponse -> Int -> m ()
+ensureCode resp code =
+    liftIO $ when (frCode resp /= code)
+        $ liftIO $ throwIO $ UnsuccessfulException resp
 
 parse227 :: Parser (String, Int)
 parse227 = do
@@ -556,72 +633,75 @@ parse257 = do
 -- Control commands
 
 login :: MonadIO m => Handle -> String -> String -> m FTPResponse
-login h user pass = last <$> sendCommands h [User user, Pass pass]
+login h user pass = do
+    resp <- last <$> sendAll h [User user, Pass pass]
+    ensureSuccess resp
 
 pasv :: MonadIO m => Handle -> m (String, Int)
 pasv h = do
-    resp <- sendCommand h Pasv
-    let (Right (host, portNum)) = parseOnly parse227 (frMessage resp)
-    return (host, portNum)
+    resp <- sendCommandS h Pasv
+    ensureCode resp 227
+    parseResponse resp parse227
 
 port :: MonadIO m => Handle -> S.HostAddress -> S.PortNumber -> m FTPResponse
-port h ha pn = sendCommand h (Port ha pn)
+port h ha pn = sendCommandS h (Port ha pn)
 
 acct :: MonadIO m => Handle -> String -> m FTPResponse
-acct h pass = sendCommand h (Acct pass)
+acct h pass = sendCommandS h (Acct pass)
 
 rename :: MonadIO m => Handle -> String -> String -> m FTPResponse
 rename h from to = do
     res <- sendCommand h (Rnfr from)
     case frStatus res of
-        Continue -> sendCommand h (Rnto to)
+        Continue -> sendCommandS h (Rnto to)
         _ -> return res
 
 dele :: MonadIO m => Handle -> String -> m FTPResponse
-dele h file = sendCommand h (Dele file)
+dele h file = sendCommandS h (Dele file)
 
 cwd :: MonadIO m => Handle -> String -> m FTPResponse
 cwd h dir =
-    sendCommand h $ if dir == ".."
+    sendCommandS h $ if dir == ".."
         then Cdup
         else Cwd dir
 
 size :: MonadIO m => Handle -> String -> m Int
 size h file = do
-    resp <- sendCommand h (Size file)
+    resp <- sendCommandS h (Size file)
+    ensureCode resp 213
     return $ read $ C.unpack $ frMessage resp
 
 mkd :: MonadIO m => Handle -> String -> m String
 mkd h dir = do
-    resp <- sendCommand h (Mkd dir)
-    let (Right dir) = parseOnly parse257 (frMessage resp)
-    return dir
+    resp <- sendCommandS h (Mkd dir)
+    ensureCode resp 257
+    parseResponse resp parse257
 
 rmd :: MonadIO m => Handle -> String -> m FTPResponse
-rmd h dir = sendCommand h (Rmd dir)
+rmd h dir = sendCommandS h (Rmd dir)
 
 pwd :: MonadIO m => Handle -> m String
 pwd h = do
-    resp <- sendCommand h Pwd
-    let (Right dir) = parseOnly parse257 (frMessage resp)
-    return dir
+    resp <- sendCommandS h Pwd
+    ensureCode resp 257
+    parseResponse resp parse257
 
 quit :: MonadIO m => Handle -> m FTPResponse
-quit h = sendCommand h Quit
+quit h = sendCommandS h Quit
 
 -- TLS commands
 
 pbsz :: MonadIO m => Handle -> Int -> m FTPResponse
-pbsz h = sendCommand h . Pbsz
+pbsz h = sendCommandS h . Pbsz
 
 prot :: MonadIO m => Handle -> ProtType -> m FTPResponse
-prot h = sendCommand h . Prot
+prot h = sendCommandS h . Prot
 
 ccc :: MonadIO m => Handle -> m FTPResponse
-ccc h = sendCommand h Ccc
+ccc h = sendCommandS h Ccc
 
 auth :: MonadIO m => Handle -> m FTPResponse
-auth h = sendCommand h Auth
+auth h = sendCommandS h Auth
 
 -- Data commands
 
@@ -633,7 +713,8 @@ withDataCommandSecurity
     :: (MonadIO m, MonadMask m)
     => Handle
     -> PortActivity
-    -> [FTPCommand]
+    -> RTypeCode
+    -> FTPCommand
     -> (Handle -> m a)
     -> m a
 withDataCommandSecurity h =
@@ -642,13 +723,13 @@ withDataCommandSecurity h =
         TLS -> withTLSDataCommand h
 
 nlst :: (MonadIO m, MonadMask m) => Handle -> [String] -> m ByteString
-nlst h args = withDataCommandSecurity h Passive [RType TA, Nlst args] getAllLineResp
+nlst h args = withDataCommandSecurity h Passive TA (Nlst args) getAllLineResp
 
 retr :: (MonadIO m, MonadMask m) => Handle -> String -> m ByteString
-retr h path = withDataCommandSecurity h Passive [RType TI, Retr path] recvAll
+retr h path = withDataCommandSecurity h Passive TI (Retr path) recvAll
 
 list :: (MonadIO m, MonadMask m) => Handle -> [String] -> m ByteString
-list h args = withDataCommandSecurity h Passive [RType TA, List args] getAllLineResp
+list h args = withDataCommandSecurity h Passive TA (List args) getAllLineResp
 
 stor
     :: (MonadIO m, MonadMask m)
@@ -658,8 +739,7 @@ stor
     -> RTypeCode
     -> m ()
 stor h loc dat rtype =
-    withDataCommandSecurity h Passive [RType rtype, Stor loc]
-        $ sendType rtype dat
+    withDataCommandSecurity h Passive rtype (Stor loc) $ sendType rtype dat
 
 data MlsdResponse = MlsdResponse {
     mrFilename :: String,
@@ -693,4 +773,4 @@ getMlsdResponse h = getMlsdResponse' h []
             ) `M.catchIOError` (\_ -> return ret)
 
 mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsdResponse]
-mlsd h path = withDataCommandSecurity h Passive [RType TA, Mlsd path] getMlsdResponse
+mlsd h path = withDataCommandSecurity h Passive TA (Mlsd path) getMlsdResponse

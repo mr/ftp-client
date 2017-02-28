@@ -80,7 +80,7 @@ import Data.Typeable
 import Debug.Trace
 
 debugging :: Bool
-debugging = True
+debugging = False
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
 debugPrint s = debugPrint' s debugging

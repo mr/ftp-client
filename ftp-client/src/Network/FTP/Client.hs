@@ -26,16 +26,19 @@ module Network.FTP.Client (
     list,
     stor,
     mlsd,
+    mlst,
     -- * Types
     FTPCommand(..),
     FTPResponse(..),
     ResponseStatus(..),
-    MlsdResponse(..),
+    MlsxResponse(..),
     RTypeCode(..),
     PortActivity(..),
     ProtType(..),
     Security(..),
     Handle(..),
+    -- * Exceptions
+    FTPException(..),
     -- * Handle Implementations
     sIOHandleImpl,
     tlsHandleImpl,
@@ -50,7 +53,7 @@ module Network.FTP.Client (
     sendCommandLine,
     createSendDataCommand,
     createTLSSendDataCommand,
-    parseMlsdLine
+    parseMlsxLine
 ) where
 
 import qualified Data.ByteString.Char8 as C
@@ -80,7 +83,7 @@ import Data.Typeable
 import Debug.Trace
 
 debugging :: Bool
-debugging = False
+debugging = True
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
 debugPrint s = debugPrint' s debugging
@@ -102,15 +105,21 @@ data Handle = Handle
     , security :: Security
     }
 
+data FTPMessage = SingleLine ByteString | MultiLine [ByteString]
+
+instance Show FTPMessage where
+    show (SingleLine message) = C.unpack message
+    show (MultiLine messages) = intercalate "\n" $ C.unpack <$> messages
+
 -- | Response from an FTP command. ex "200 Welcome!"
 data FTPResponse = FTPResponse {
     frStatus :: ResponseStatus, -- ^ Interpretation of the first digit of an FTP response code
     frCode :: Int, -- ^ The three digit response code
-    frMessage :: ByteString -- ^ Text of the response
+    frMessage :: FTPMessage -- ^ Text of the response
 }
 
 instance Show FTPResponse where
-    show fr = (show $ frCode fr) <> " " <> (C.unpack $ frMessage fr)
+    show fr = (show $ frCode fr) <> " " <> (show $ frMessage fr)
 
 -- | First digit of an FTP response
 data ResponseStatus
@@ -125,6 +134,7 @@ data FTPException
     = FailureRetryException FTPResponse
     | FailureException FTPResponse
     | UnsuccessfulException FTPResponse
+    | BogusResponseFormatException FTPResponse
     | BadProtocolResponseException ByteString
     deriving (Show, Typeable)
 
@@ -170,6 +180,7 @@ data FTPCommand
     | Pbsz Int
     | Prot ProtType
     | Mlsd String
+    | Mlst String
     | Cwd String
     | Cdup
     | Ccc
@@ -211,6 +222,7 @@ serializeCommand (Pbsz buf)   = "PBSZ " <> show buf
 serializeCommand (Prot P)     = "PROT P"
 serializeCommand (Prot C)     = "PROT C"
 serializeCommand (Mlsd path)  = "MLSD " <> path
+serializeCommand (Mlst path)  = "MLST " <> path
 serializeCommand (Cwd dir)    = "CWD " <> dir
 serializeCommand Cdup         = "CDUP"
 serializeCommand Ccc          = "CCC"
@@ -234,12 +246,17 @@ getResponse h = do
     line <- liftIO $ getLineResp h
     let (code, rest) = C.splitAt 3 line
     message <- if C.head rest == '-'
-        then loopMultiLine h code line
-        else return line
+        then MultiLine <$> loopMultiLine h code [line]
+        else return $ SingleLine line
+    let codeDroppedMessage = case message of
+            SingleLine message -> SingleLine $ C.drop 4 message
+            MultiLine [] -> MultiLine []
+            MultiLine (message:messages) ->
+                MultiLine ((C.drop 4 message):messages)
     let response = FTPResponse
             (responseStatus code)
             (read $ C.unpack code)
-            (C.drop 4 message)
+            codeDroppedMessage
     case frStatus response of
         FailureRetry -> liftIO $ throwIO $ FailureRetryException response
         Failure -> liftIO $ throwIO $ FailureException response
@@ -249,15 +266,15 @@ loopMultiLine
     :: MonadIO m
     => Handle
     -> ByteString
-    -> ByteString
-    -> m ByteString
-loopMultiLine h code line = do
+    -> [ByteString]
+    -> m [ByteString]
+loopMultiLine h code lines = do
     nextLine <- liftIO $ getLineResp h
-    let multiLine = line <> "\n" <> nextLine
+    let newLines = lines <> [C.dropWhile (== ' ') nextLine]
         nextCode = C.take 3 nextLine
     if nextCode == code
-        then return multiLine
-        else loopMultiLine h nextCode multiLine
+        then return newLines
+        else loopMultiLine h code newLines
 
 ensureSuccess :: MonadIO m => FTPResponse -> m FTPResponse
 ensureSuccess resp =
@@ -605,10 +622,13 @@ withTLSDataCommand ch pa code cmd f = do
 
 parseResponse :: MonadIO m => FTPResponse -> Parser a -> m a
 parseResponse resp p =
-    case parseOnly p (frMessage resp) of
+    let parsableMessage = case frMessage resp of
+            SingleLine message -> message
+            MultiLine messages -> C.intercalate "\n" messages
+    in case parseOnly p parsableMessage of
         Right x -> return x
         Left _ -> liftIO $ throwIO
-            $ BadProtocolResponseException (frMessage resp)
+            $ BadProtocolResponseException parsableMessage
 
 ensureCode :: MonadIO m => FTPResponse -> Int -> m ()
 ensureCode resp code =
@@ -669,7 +689,9 @@ size :: MonadIO m => Handle -> String -> m Int
 size h file = do
     resp <- sendCommandS h (Size file)
     ensureCode resp 213
-    return $ read $ C.unpack $ frMessage resp
+    return $ case frMessage resp of
+        SingleLine message -> read $ C.unpack $ message
+        MultiLine _ -> 0
 
 mkd :: MonadIO m => Handle -> String -> m String
 mkd h dir = do
@@ -688,6 +710,15 @@ pwd h = do
 
 quit :: MonadIO m => Handle -> m FTPResponse
 quit h = sendCommandS h Quit
+
+mlst :: (MonadIO m, MonadMask m) => Handle -> String -> m MlsxResponse
+mlst h path = do
+    resp <- sendCommandS h (Mlst path)
+    case frMessage resp of
+        SingleLine message -> return $ parseMlsxLine message
+        MultiLine messages -> if length messages >= 2
+            then return $ parseMlsxLine $ messages !! 1
+            else liftIO $ throwIO $ BogusResponseFormatException resp
 
 -- TLS commands
 
@@ -741,7 +772,7 @@ stor
 stor h loc dat rtype =
     withDataCommandSecurity h Passive rtype (Stor loc) $ sendType rtype dat
 
-data MlsdResponse = MlsdResponse {
+data MlsxResponse = MlsxResponse {
     mrFilename :: String,
     mrFacts :: Map String String
 } deriving (Show)
@@ -751,26 +782,26 @@ splitApart on s =
     let (x0, x1) = C.break (== on) s
     in (x0, C.drop 1 x1)
 
-parseMlsdLine :: ByteString -> MlsdResponse
-parseMlsdLine line =
+parseMlsxLine :: ByteString -> MlsxResponse
+parseMlsxLine line =
     let (factLine, filename) = splitApart ' ' line
         bFacts = splitApart '=' <$> C.split ';' factLine
         facts
             = Map.fromList
             $ filter (not . null . fst)
             $ join (***) C.unpack <$> bFacts
-    in MlsdResponse (C.unpack filename) facts
+    in MlsxResponse (C.unpack filename) facts
 
-getMlsdResponse :: (MonadIO m, MonadCatch m) => Handle -> m [MlsdResponse]
-getMlsdResponse h = getMlsdResponse' h []
+getMlsxResponse :: (MonadIO m, MonadCatch m) => Handle -> m [MlsxResponse]
+getMlsxResponse h = getMlsxResponse' h []
     where
-        getMlsdResponse' h ret = ( do
+        getMlsxResponse' h ret = ( do
             line <- liftIO $ getLineResp h
-            getMlsdResponse' h $
+            getMlsxResponse' h $
                 if C.null line
                     then ret
-                    else (parseMlsdLine line):ret
+                    else (parseMlsxLine line):ret
             ) `M.catchIOError` (\_ -> return ret)
 
-mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsdResponse]
-mlsd h path = withDataCommandSecurity h Passive TA (Mlsd path) getMlsdResponse
+mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsxResponse]
+mlsd h path = withDataCommandSecurity h Passive TA (Mlsd path) getMlsxResponse

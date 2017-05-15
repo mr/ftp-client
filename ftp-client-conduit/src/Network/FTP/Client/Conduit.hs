@@ -34,7 +34,7 @@ import Network.FTP.Client
     , sIOHandleImpl
     , tlsHandleImpl
     , Security(..)
-    , parseMlsdLine
+    , parseMlsxLine
     )
 
 import qualified Network.FTP.Client as FTP
@@ -186,7 +186,7 @@ mlsd
     :: MonadResource m
     => FTP.Handle
     -> String
-    -> Producer m FTP.MlsdResponse
+    -> Producer m FTP.MlsxResponse
 mlsd ch dir =
     sourceDataCommandSecurity ch Passive TA (Mlsd dir) getAllLineRespC
-        .| mapC parseMlsdLine
+        .| mapC parseMlsxLine

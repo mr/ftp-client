@@ -63,7 +63,7 @@ import Data.List
 import Data.Attoparsec.ByteString.Char8
 import qualified Network.Socket as S
 import qualified System.IO as SIO
-import Data.Monoid ((<>), mconcat)
+import Data.Monoid ((<>))
 import Control.Exception
 import Control.Monad.Catch (MonadCatch, MonadMask)
 import qualified Control.Monad.Catch as M
@@ -71,7 +71,6 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Data.Bits
 import Network.Connection
-import System.IO.Error
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Functor ((<$>))
 import Control.Applicative ((<*>))
@@ -80,16 +79,13 @@ import qualified Data.Map.Strict as Map
 import Control.Arrow
 import Data.Typeable
 
-import Debug.Trace
-
 debugging :: Bool
 debugging = True
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
-debugPrint s = debugPrint' s debugging
-    where
-        debugPrint' _ False = return ()
-        debugPrint' s True = liftIO $ print s
+debugPrint s = if debugging
+    then return ()
+    else liftIO $ print s
 
 debugResponse :: (Show a, MonadIO m) => a -> m ()
 debugResponse s = debugPrint $ "Recieved: " <> (show s)

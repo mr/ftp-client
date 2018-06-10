@@ -19,7 +19,7 @@ executable example-exe
   build-depends:       base
                      , ftp-client
                      , ftp-client-conduit
-                     , conduit-combinators
+                     , conduit
                      , bytestring
                      , containers
   default-language:    Haskell2010

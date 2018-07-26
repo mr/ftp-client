@@ -1,12 +1,12 @@
 name:                ftp-client
-version:             0.5.0.0
+version:             0.5.0.1
 synopsis:            Transfer files with FTP and FTPS
 description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS.
 homepage:            https://github.com/mr/ftp-client
 license:             PublicDomain
 maintainer:          mrobinson7627@gmail.com
 license-file:        LICENSE
-author:              Matthew Robinson
+author:              Megan Robinson
 category:            Web
 build-type:          Simple
 extra-source-files:  README.md

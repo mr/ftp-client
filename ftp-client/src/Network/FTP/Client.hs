@@ -319,7 +319,9 @@ createSocket
     -> S.AddrInfo
     -> m (S.Socket, S.AddrInfo)
 createSocket host portNum hints = do
-    addr:_ <- liftIO $ S.getAddrInfo (Just hints) host (Just $ show portNum)
+    addr <- liftIO $ do
+      a:_ <- S.getAddrInfo (Just hints) host (Just $ show portNum)
+      return a
     debugPrint $ "Addr: " <> show addr
     sock <- liftIO $ S.socket
         (S.addrFamily addr)
@@ -426,7 +428,9 @@ withDataSocketActive
     -> (S.Socket -> m a)
     -> m a
 withDataSocketActive h f = withSocketActive $ \socket -> do
-    (S.SockAddrInet sPort sHost) <- liftIO $ S.getSocketName socket
+    (sPort, sHost) <- liftIO $ do
+      (S.SockAddrInet p h) <- S.getSocketName socket
+      return (p,h)
     port h sHost sPort
     f socket
 
@@ -592,7 +596,9 @@ createTLSSendDataCommand ch pa cmd = do
         resp <- sendCommand ch cmd
         ensureSucessfulData ch resp
         acceptedSock <- acceptData pa socket
-        (S.SockAddrInet sPort sHost) <- liftIO $ S.getSocketName acceptedSock
+        (sPort, sHost) <- liftIO $ do
+          (S.SockAddrInet p h) <- S.getSocketName acceptedSock
+          return (p, h)
         let (h1, h2, h3, h4) = S.hostAddressToTuple sHost
             hostName = intercalate "." $ (show . fromEnum) <$> [h1, h2, h3, h4]
         h <- liftIO $ S.socketToHandle acceptedSock SIO.ReadWriteMode

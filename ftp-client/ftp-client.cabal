@@ -1,5 +1,5 @@
 name:                ftp-client
-version:             0.5.1.0
+version:             0.5.1.1
 synopsis:            Transfer files with FTP and FTPS
 description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS.
 homepage:            https://github.com/mr/ftp-client
@@ -17,12 +17,12 @@ library
   exposed-modules:     Network.FTP.Client
   build-depends:       base >= 4.8 && < 5
                      , bytestring
-                     , network
+                     , network >=2.6.3.6 && <2.9
                      , attoparsec >= 0.10
                      , connection >= 0.2
                      , transformers
                      , exceptions
-                     , containers
+                     , containers >=0.5.11.0 && <0.7
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
 
@@ -30,7 +30,7 @@ test-suite ftp-client-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs
-  build-depends:       base
+  build-depends:       base >=4.11.1.0 && < 5
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 

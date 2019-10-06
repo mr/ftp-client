@@ -30,6 +30,7 @@ module Network.FTP.Client (
     -- * Types
     FTPCommand(..),
     FTPResponse(..),
+    FTPMessage(..),
     ResponseStatus(..),
     MlsxResponse(..),
     RTypeCode(..),
@@ -80,15 +81,13 @@ import Control.Arrow
 import Data.Typeable
 
 debugging :: Bool
-debugging = True
+debugging = False
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
-debugPrint s = if debugging
-    then return ()
-    else liftIO $ print s
+debugPrint s = when debugging (liftIO $ print s)
 
 debugResponse :: (Show a, MonadIO m) => a -> m ()
-debugResponse s = debugPrint $ "Recieved: " <> (show s)
+debugResponse s = debugPrint $ "Recieved: " <> show s
 
 data Security = Clear | TLS
 
@@ -102,6 +101,7 @@ data Handle = Handle
     }
 
 data FTPMessage = SingleLine ByteString | MultiLine [ByteString]
+    deriving Eq
 
 instance Show FTPMessage where
     show (SingleLine message) = C.unpack message
@@ -112,10 +112,10 @@ data FTPResponse = FTPResponse {
     frStatus :: ResponseStatus, -- ^ Interpretation of the first digit of an FTP response code
     frCode :: Int, -- ^ The three digit response code
     frMessage :: FTPMessage -- ^ Text of the response
-}
+} deriving Eq
 
 instance Show FTPResponse where
-    show fr = (show $ frCode fr) <> " " <> (show $ frMessage fr)
+    show fr = show (frCode fr) <> " " <> show (frMessage fr)
 
 -- | First digit of an FTP response
 data ResponseStatus
@@ -203,11 +203,11 @@ serializeCommand (Acct acct)  = "ACCT " <> acct
 serializeCommand (RType rt)   = "TYPE " <> serialzeRTypeCode rt
 serializeCommand (Retr file)  = "RETR " <> file
 serializeCommand (Nlst [])    = "NLST"
-serializeCommand (Nlst args)  = "NLST " <> intercalate " " args
+serializeCommand (Nlst args)  = "NLST " <> unwords args
 serializeCommand (Port ha pn) = "PORT " <> formatPort ha pn
 serializeCommand (Stor loc)   = "STOR " <> loc
 serializeCommand (List [])    = "LIST"
-serializeCommand (List args)  = "LIST " <> intercalate " " args
+serializeCommand (List args)  = "LIST " <> unwords args
 serializeCommand (Rnfr from)  = "RNFR " <> from
 serializeCommand (Rnto to)    = "RNTO " <> to
 serializeCommand (Dele file)  = "DELE " <> file
@@ -248,7 +248,7 @@ getResponse h = do
             SingleLine message -> SingleLine $ C.drop 4 message
             MultiLine [] -> MultiLine []
             MultiLine (message:messages) ->
-                MultiLine ((C.drop 4 message):messages)
+                MultiLine $ C.drop 4 message : messages
     let response = FTPResponse
             (responseStatus code)
             (read $ C.unpack code)
@@ -268,7 +268,8 @@ loopMultiLine h code lines = do
     nextLine <- liftIO $ getLineResp h
     let newLines = lines <> [C.dropWhile (== ' ') nextLine]
         nextCode = C.take 3 nextLine
-    if nextCode == code
+        continue = C.head $ C.drop 3 nextLine
+    if nextCode == code && continue /= '-'
         then return newLines
         else loopMultiLine h code newLines
 
@@ -343,7 +344,7 @@ withSocketPassive host portNum f = do
         (createSocket (Just host) portNum hints)
         (liftIO . S.close . fst)
         (\(sock, addr) -> do
-            debugPrint $ "Connecting"
+            debugPrint "Connecting"
             liftIO $ S.connect sock (S.addrAddress addr)
             debugPrint "Connected"
             f sock
@@ -468,7 +469,7 @@ createSendDataCommand
     => Handle
     -> PortActivity
     -> FTPCommand
-    -> m (SIO.Handle)
+    -> m SIO.Handle
 createSendDataCommand h pa cmd = withDataSocket pa h $ \socket -> do
     resp <- sendCommand h cmd
     ensureSucessfulData h resp
@@ -578,7 +579,7 @@ withFTPS
     -> Int
     -> (Handle -> FTPResponse -> m a)
     -> m a
-withFTPS host portNum = withTLSHandle host portNum
+withFTPS = withTLSHandle
 
 -- TLS data connection
 
@@ -600,7 +601,7 @@ createTLSSendDataCommand ch pa cmd = do
           (S.SockAddrInet p h) <- S.getSocketName acceptedSock
           return (p, h)
         let (h1, h2, h3, h4) = S.hostAddressToTuple sHost
-            hostName = intercalate "." $ (show . fromEnum) <$> [h1, h2, h3, h4]
+            hostName = intercalate "." $ show . fromEnum <$> [h1, h2, h3, h4]
         h <- liftIO $ S.socketToHandle acceptedSock SIO.ReadWriteMode
         liftIO $ connectTLS h hostName (fromEnum sPort)
 
@@ -619,7 +620,7 @@ withTLSDataCommand ch pa code cmd f = do
         (liftIO . connectionClose)
         (f . tlsHandleImpl)
     resp <- getResponse ch
-    debugPrint $ "Recieved: " <> (show resp)
+    debugPrint $ "Recieved: " <> show resp
     return x
 
 parseResponse :: MonadIO m => FTPResponse -> Parser a -> m a
@@ -692,7 +693,7 @@ size h file = do
     resp <- sendCommandS h (Size file)
     ensureCode resp 213
     return $ case frMessage resp of
-        SingleLine message -> read $ C.unpack $ message
+        SingleLine message -> read . C.unpack $ message
         MultiLine _ -> 0
 
 mkd :: MonadIO m => Handle -> String -> m String
@@ -739,7 +740,7 @@ auth h = sendCommandS h Auth
 -- Data commands
 
 sendType :: MonadIO m => RTypeCode -> ByteString -> Handle -> m ()
-sendType TA dat h = void $ mapM (sendCommandLine h) $ C.split '\n' dat
+sendType TA dat h = mapM_ (sendCommandLine h) $ C.split '\n' dat
 sendType TI dat h = liftIO $ send h dat
 
 withDataCommandSecurity
@@ -802,7 +803,7 @@ getMlsxResponse h = getMlsxResponse' h []
             getMlsxResponse' h $
                 if C.null line
                     then ret
-                    else (parseMlsxLine line):ret
+                    else parseMlsxLine line : ret
             ) `M.catchIOError` (\_ -> return ret)
 
 mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsxResponse]

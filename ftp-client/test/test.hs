@@ -72,5 +72,4 @@ main = hspec $ do
         it "doesn't hang on empty response" $ do
             let expected = C.pack ""
             (TestHandle mvars h) <- testHandle [C.pack ""] [] Clear
-            res <- recvAll h
-            res `shouldBe` expected
+            recvAll h `shouldReturn` expected

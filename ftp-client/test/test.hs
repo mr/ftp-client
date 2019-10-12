@@ -4,6 +4,7 @@ import Test.Tasty
 import Test.Tasty.Hspec
 import Network.FTP.Client hiding (Success)
 import qualified Network.FTP.Client as F
+import Control.Monad.IO.Class
 import Control.Concurrent.MVar
 
 data TestHandleMVars = TestHandleMVars
@@ -47,7 +48,7 @@ testHandle recvResps recvLineResps sec = do
     return $ TestHandle testHandleMVars handle
 
 main :: IO ()
-main = hspec $
+main = hspec $ do
     describe "Network.FTP.Client.sendCommand" $ do
         it "sends USER for User" $ do
             let expected = FTPResponse
@@ -67,3 +68,9 @@ main = hspec $
                 ] Clear
             sendCommand h (User "megan") `shouldReturn` expected
             takeMVar (thmSend mvars) `shouldReturn` [C.pack "USER megan\r\n"]
+    describe "Network.FTP.Client.recvAll" $
+        it "doesn't hang on empty response" $ do
+            let expected = C.pack ""
+            (TestHandle mvars h) <- testHandle [C.pack ""] [] Clear
+            res <- recvAll h
+            res `shouldBe` expected

@@ -46,6 +46,7 @@ module Network.FTP.Client (
     -- * Lower Level Functions
     sendCommand,
     sendCommandS,
+    recvAll,
     sendAll,
     sendAllS,
     getLineResp,
@@ -509,8 +510,10 @@ recvAll h = recvAll' ""
     where
         recvAll' bs = ( do
             chunk <- liftIO $ recv h defaultChunkSize
-            recvAll' $ bs <> chunk)
-                `M.catchIOError` (\_ -> return bs)
+            if C.null chunk
+               then return bs
+               else recvAll' $ bs <> chunk
+            ) `M.catchIOError` (\_ -> return bs)
 
 -- TLS connection
 

@@ -268,8 +268,7 @@ loopMultiLine h code lines = do
     nextLine <- liftIO $ getLineResp h
     let newLines = lines <> [C.dropWhile (== ' ') nextLine]
         nextCode = C.take 3 nextLine
-        continue = C.head $ C.drop 3 nextLine
-    if nextCode == code && continue /= '-'
+    if nextCode == code
         then return newLines
         else loopMultiLine h code newLines
 

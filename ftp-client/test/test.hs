@@ -48,11 +48,22 @@ testHandle recvResps recvLineResps sec = do
 
 main :: IO ()
 main = hspec $
-    describe "Network.FTP.Client.sendCommand" $
+    describe "Network.FTP.Client.sendCommand" $ do
         it "sends USER for User" $ do
             let expected = FTPResponse
                     F.Success 200
                     (SingleLine $ C.pack "Ok")
             (TestHandle mvars h) <- testHandle [] [C.pack "200 Ok"] Clear
+            sendCommand h (User "megan") `shouldReturn` expected
+            takeMVar (thmSend mvars) `shouldReturn` [C.pack "USER megan\r\n"]
+        it "sends USER for User and receives a multiline response" $ do
+            let expected = FTPResponse
+                    F.Success 200
+                    (MultiLine [C.pack "line1", C.pack "line2", C.pack "200 line3"])
+            (TestHandle mvars h) <- testHandle []
+                [ C.pack "200-line1\r\n"
+                , C.pack "line2\r\n"
+                , C.pack "200 line3\r\n"
+                ] Clear
             sendCommand h (User "megan") `shouldReturn` expected
             takeMVar (thmSend mvars) `shouldReturn` [C.pack "USER megan\r\n"]

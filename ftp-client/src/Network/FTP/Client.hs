@@ -533,8 +533,8 @@ connectTLS h host portNum = do
             }
     liftIO $ connectFromHandle context h connectionParams
 
-createTLSConnection
-    :: (MonadIO m, MonadMask m)
+createTLSConnection ::
+       (MonadIO m, MonadMask m)
     => String
     -> Int
     -> m (FTPResponse, Connection)

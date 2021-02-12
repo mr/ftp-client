@@ -82,7 +82,7 @@ import Control.Arrow
 import Data.Typeable
 
 debugging :: Bool
-debugging = False
+debugging = True
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
 debugPrint s = when debugging (liftIO $ print s)
@@ -267,11 +267,24 @@ loopMultiLine
     -> m [ByteString]
 loopMultiLine h code lines = do
     nextLine <- liftIO $ getLineResp h
-    let newLines = lines <> [C.dropWhile (== ' ') nextLine]
-        nextCode = C.take 3 nextLine
-    if nextCode == code
-        then return newLines
-        else loopMultiLine h code newLines
+    let newLineSpace = C.dropWhile (== ' ') nextLine
+        -- some ftp implementations start all multiline responses with "<code>-"
+        -- this is not standard but we account for that possibility
+        (nextCode, newLineContinue) = C.splitAt 3 nextLine
+        hasDash = C.head newLineContinue == '-'
+        codePresent = nextCode == code
+        -- strip the code and dash off if they exist
+        -- otherwise just strip leading spaces
+        newLine = if C.length nextLine > 3 && hasDash
+            then C.drop 1 newLineContinue
+            else newLineSpace
+        newLines = lines <> [newLine]
+        -- we continue if we find the code with a dash afterward
+        -- the code by itself (no dash) means we should stop
+        continue = (codePresent && hasDash) || not codePresent
+    if continue
+        then loopMultiLine h code newLines
+        else return newLines
 
 ensureSuccess :: MonadIO m => FTPResponse -> m FTPResponse
 ensureSuccess resp =

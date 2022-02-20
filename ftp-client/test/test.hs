@@ -1,7 +1,6 @@
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
-import Test.Tasty
-import Test.Tasty.Hspec
+import Test.Hspec
 import Network.FTP.Client hiding (Success)
 import qualified Network.FTP.Client as F
 import Control.Monad.IO.Class

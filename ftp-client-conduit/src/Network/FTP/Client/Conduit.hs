@@ -58,7 +58,7 @@ debugPrint s = debugPrint' s debugging
 debugResponse :: (Show a, MonadIO m) => a -> m ()
 debugResponse s = debugPrint $ "Recieved: " <> (show s)
 
-getAllLineRespC :: MonadIO m => FTP.Handle -> Producer m ByteString
+getAllLineRespC :: MonadIO m => FTP.Handle -> ConduitT i ByteString m ()
 getAllLineRespC h = loop
     where
         loop = do
@@ -70,7 +70,7 @@ getAllLineRespC h = loop
                     yield line
                     loop
 
-sendAllLineC :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
+sendAllLineC :: MonadIO m => FTP.Handle -> ConduitT ByteString o m ()
 sendAllLineC h = loop
     where
         loop = do
@@ -130,7 +130,7 @@ sourceTLSDataCommand ch pa code cmd f = do
     debugResponse resp
     return x
 
-sourceFTPHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
+sourceFTPHandle :: MonadIO m => FTP.Handle -> ConduitT i ByteString m ()
 sourceFTPHandle h = loop
     where
         loop = do
@@ -142,7 +142,7 @@ sourceFTPHandle h = loop
                     yield bs
                     loop
 
-sinkFTPHandle :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
+sinkFTPHandle :: MonadIO m => FTP.Handle -> ConduitT ByteString o m ()
 sinkFTPHandle h = loop
     where
         loop = do
@@ -157,19 +157,19 @@ sendType
     :: MonadResource m
     => RTypeCode
     -> FTP.Handle
-    -> Consumer ByteString m ()
+    -> ConduitT ByteString o m ()
 sendType TA h = sendAllLineC h
 sendType TI h = sinkFTPHandle h
 
-nlst :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
+nlst :: MonadResource m => FTP.Handle -> [String] -> ConduitT i ByteString m ()
 nlst ch args =
     sourceDataCommandSecurity ch Passive TA (Nlst args) getAllLineRespC
 
-retr :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
+retr :: MonadResource m => FTP.Handle -> String -> ConduitT i ByteString m ()
 retr ch path =
     sourceDataCommandSecurity ch Passive TI (Retr path) sourceFTPHandle
 
-list :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
+list :: MonadResource m => FTP.Handle -> [String] -> ConduitT i ByteString m ()
 list ch args =
     sourceDataCommandSecurity ch Passive TA (List args) getAllLineRespC
 
@@ -178,7 +178,7 @@ stor
     => FTP.Handle
     -> String
     -> RTypeCode
-    -> Consumer ByteString m ()
+    -> ConduitT ByteString o m ()
 stor ch loc rtype =
     sourceDataCommandSecurity ch Passive rtype (Stor loc) $ sendType rtype
 
@@ -186,7 +186,7 @@ mlsd
     :: MonadResource m
     => FTP.Handle
     -> String
-    -> Producer m FTP.MlsxResponse
+    -> ConduitT i FTP.MlsxResponse m ()
 mlsd ch dir =
     sourceDataCommandSecurity ch Passive TA (Mlsd dir) getAllLineRespC
         .| mapC parseMlsxLine
